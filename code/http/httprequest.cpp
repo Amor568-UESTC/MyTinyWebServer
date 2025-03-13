@@ -3,13 +3,13 @@
 using namespace std;
 
 
-const std::unordered_set<std::string> DEFAULT_HTML=
+const std::unordered_set<std::string> HttpRequest::DEFAULT_HTML=
 {
     "/index","/register","/login",
     "/welcome","/vedio","/pucture",
 };
 
-const std::unordered_map<std::string,int> DEFAULT_HTML_TAG=
+const std::unordered_map<std::string,int> HttpRequest::DEFAULT_HTML_TAG=
 {
     {"/register,html",0},{"/login.html",1},
 };
@@ -50,7 +50,14 @@ void HttpRequest::ParseBody_(const std::string& line)
 
 void HttpRequest::ParsePath_()
 {
-
+    if(path_=="/") path_="/index.html";
+    else 
+        for(auto& item:DEFAULT_HTML)
+            if(item==path_)
+            {
+                path_+=".html";
+                break;
+            }
 }
 
 void HttpRequest::ParsePost_()
@@ -81,7 +88,7 @@ void HttpRequest::ParseFromUrlencoded_()
     int num=0;
     int n=body_.size();
     int i=0,j=0;
-    for(i;i<n;i++)
+    for(;i<n;i++)
     {
         char ch=body_[i];
         switch(ch)
@@ -117,7 +124,7 @@ void HttpRequest::ParseFromUrlencoded_()
     }
 }
 
-bool UserVerify(const std::string& name,const std::string& pwd,bool isLogin)
+bool HttpRequest::UserVerify(const std::string& name,const std::string& pwd,bool isLogin)
 {
     if(name==""||pwd=="") return 0;
     LOG_INFO("Verify name:%s pwd:%s",name.c_str(),pwd.c_str());
@@ -180,7 +187,7 @@ bool UserVerify(const std::string& name,const std::string& pwd,bool isLogin)
     return flag;
 }
 
-int ConverHex(char ch)
+int HttpRequest::ConverHex(char ch)
 {
     if(ch>='A'&&ch<='F') return ch-'A'+10;
     if(ch>='a'&&ch<='f') return ch-'a'+10;
@@ -221,9 +228,11 @@ bool HttpRequest::parse(Buffer& buff)
             default:
                 break;
         }
-        LOG_DEBUG("[%s], [%s], [%s]",method_.c_str(),path_.c_str(),version_.c_str());
-        return 1;
+        if(lineEnd==buff.BeginWrite()) break;
+        buff.RetrieveUntil(lineEnd+2);
     }
+    LOG_DEBUG("[%s], [%s], [%s]",method_.c_str(),path_.c_str(),version_.c_str());
+    return 1;
 }
 
 std::string HttpRequest::path() const { return path_;}

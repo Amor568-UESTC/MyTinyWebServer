@@ -5,7 +5,7 @@ int main()
 {
     WebServer server(
         8888,3,60000,false,
-        3306,"root","568","webserver",
+        3306,"root","568","yourdb",
         12,6,true,1,1024
     );
     server.Start();
