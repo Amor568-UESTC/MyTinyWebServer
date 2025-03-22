@@ -102,7 +102,6 @@ bool HttpConn::process()
     {
         LOG_DEBUG("%s",request_.path().c_str());
         response_.Init(srcDir,request_.path(),request_.IsKeepAlive(),200);
-
     }
     else response_.Init(srcDir,request_.path(),0,400);
 

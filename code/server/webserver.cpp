@@ -85,10 +85,10 @@ void WebServer::InitEventMode_(int trigMode)
             connEvent_|=EPOLLET;
             break;
         case 2:
-            listenFd_|=EPOLLET;
+            listenEvent_|=EPOLLET;
             break;
         default:
-            listenFd_|=EPOLLET;
+            listenEvent_|=EPOLLET;
             connEvent_|=EPOLLET;
             break;
     }

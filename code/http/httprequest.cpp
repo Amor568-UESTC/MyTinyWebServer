@@ -11,7 +11,7 @@ const std::unordered_set<std::string> HttpRequest::DEFAULT_HTML=
 
 const std::unordered_map<std::string,int> HttpRequest::DEFAULT_HTML_TAG=
 {
-    {"/register,html",0},{"/login.html",1},
+    {"/register.html",0},{"/login.html",1},
 };
 
 bool HttpRequest::ParseRequestLine_(const std::string& line)
@@ -124,6 +124,7 @@ void HttpRequest::ParseFromUrlencoded_()
     }
 }
 
+// 用户认证逻辑疑似有问题
 bool HttpRequest::UserVerify(const std::string& name,const std::string& pwd,bool isLogin)
 {
     if(name==""||pwd=="") return 0;
