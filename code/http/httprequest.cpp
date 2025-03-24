@@ -6,7 +6,7 @@ using namespace std;
 const std::unordered_set<std::string> HttpRequest::DEFAULT_HTML=
 {
     "/index","/register","/login",
-    "/welcome","/vedio","/pucture",
+    "/welcome","/video","/picture",
 };
 
 const std::unordered_map<std::string,int> HttpRequest::DEFAULT_HTML_TAG=
@@ -124,7 +124,6 @@ void HttpRequest::ParseFromUrlencoded_()
     }
 }
 
-// 用户认证逻辑疑似有问题
 bool HttpRequest::UserVerify(const std::string& name,const std::string& pwd,bool isLogin)
 {
     if(name==""||pwd=="") return 0;

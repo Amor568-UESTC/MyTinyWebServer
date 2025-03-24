@@ -68,10 +68,9 @@
     用户认证。创建sql句柄，使用SqlConnRAII类将连接池实例队列中的
     空闲连接取出。flag表示是否能够认证成功，order为mysql命令。
     先尝试select根据username在数据库中查找出username和password，
-    若出错则返回0。否则将结果存在res中使用mysql_fetch_row捕获
-    结果中的行将查询出的password存储到password字符串中。查看是否
-    在登陆？是则比较pwd和password决定flag。不在登陆(注册)则表明
-    用户名已存在。
+    若出错则返回0。(注意为空集合不是出错!)否则将结果存在res中使用
+    mysql_fetch_row捕获结果中的行将查询出的password存储到
+    password字符串中。查看是否在登陆？是则比较pwd和password决定flag。(若没有该用户密码为空)不在登陆(注册)则表明用户名已存在。
 
     # state_        PARSE_STATE
     表明此时分析的状态

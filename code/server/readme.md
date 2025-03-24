@@ -44,7 +44,7 @@
 ### 程序核心，最大类WebServer
 
     //了解该类可以宏观上查看本程序调用各个方法的
-    顺序，了解
+    顺序，了解运作基本原理
 
 ## 类内部私有成员和函数
 
@@ -89,14 +89,20 @@
     更新timer_中client对应fd的过期时间
 
     # CloseConn(HttpConn* client)
-    将client从红黑树中取出
+    将client从红黑树中取出，并调用其Close函数
 
     # OnRead_(HttpConn* client)
-    调用client的read函数，读完则关闭client
+    调用client的read函数，读完则关闭client，调用
+    OnProcess()函数
 
     # OnWrite_(HttpConn* client)
+    调用client的write函数，若已经全部写完且仍保持存活，
+    调用OnProcess函数，若为EAGAIN错误，表示没有写完，
+    继续让client为写模式。最终关闭客户端
 
     # OnProcess_(HttpConn* client)
+    调用client的porcess函数，成功则开始写，否则继续读。
+    即判断client此时应当读或者写，进行转换
 
     # MAX_FD        static const int
     最大FD数量
@@ -108,6 +114,7 @@
     端口号
 
     # openLinger_       bool
+    优雅关闭标志
 
     # timeoutMS_        int 
     超时时间
@@ -125,7 +132,7 @@
     描述listenFd_性质
 
     # connEvent_        uint32_t
-    描述
+    描述客户端连接事件性质
 
     # timer_            unique_ptr<HeapTimer>
     定时器
@@ -134,6 +141,7 @@
     线程池
 
     # epoller_          unique_ptr<Epoller>
+    epoll使用类
 
     # user_             unordered_map<int,HttpConn>
     用户
@@ -141,8 +149,19 @@
 ## 类内部公有函数
 
     # WebServer(int port, ... ,)
+    按照参数初始化port_,openLinger_,timeoutMS_,isClose_置0
+    timer_,threadpool_,epoller_构造。获取文件夹，并初始化
+    srcDir_为源文件夹引给HttpConn::srcDir,初始化连接池实例，
+    初始化事件模式，套接字等。若开启Log，初始化Log实例，向Log中
+    写入基本信息
 
     # ~WebServer()
+    关闭listenFd_,isClose_标志置1,释放srcDir_，关闭sql连接池
+    实例。
 
     # void Start()
+    开始服务器运行。见设置timeMS为-1，进入循环。判断是否有timeoutMS_
+    >0，设置timeMS为定时器下个事件过期时间，调用epoller检测IO。
+    检测完成后根据就绪IO的事件类型进行操作：监听，读，或者写事件。
+
 

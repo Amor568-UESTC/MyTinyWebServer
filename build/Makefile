@@ -11,3 +11,4 @@ all:$(OBJS)
 
 clean:
 	rm -rf ../bin
+	rm -rf ../log

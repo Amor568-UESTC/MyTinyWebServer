@@ -224,7 +224,7 @@ WebServer::WebServer(
 {
     srcDir_=getcwd(nullptr,256);
     assert(srcDir_);
-    strncat(srcDir_,"/rss",16);
+    strncat(srcDir_,"/rss/",16);
     HttpConn::userCnt=0;
     HttpConn::srcDir=srcDir_;
     SqlConnPool::Instance()->Init("localhost",sqlPort,sqlUser,sqlPwd,dbName,connPoolNum);
