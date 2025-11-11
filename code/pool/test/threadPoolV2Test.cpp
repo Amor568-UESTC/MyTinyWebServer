@@ -30,12 +30,17 @@ int main() {
 
     srand(time(NULL));
 
-    for (int i = 0; i < 1e3; ++i) {
-        auto anyFuture1 = tpV2.submit(i, is_prime, rand() % i);
-        std::cout<< std::any_cast<bool>(anyFuture1)
-        auto anyFuture2 = tpV2.submit(i + 1, fibonacci_iterative, rand() % i);
-    }
+    std::cout << tpV2.size() << std::endl;
 
+    std::cout << "==========================" << std::endl;
+
+    for (int i = 0; i < 1e3; ++i) {
+        auto anyFuture1 = tpV2.submit(is_prime, rand() % 1000);
+        std::cout << "ActiveThreads : " << tpV2.getActiveThreads() << std::endl;
+        auto anyFuture2 = tpV2.submit(AnyReturnPriTask::Priority::HIGH, fibonacci_iterative, rand() % 1000);
+        std::cout << anyFuture1.get() << std::endl;
+        std::cout << anyFuture2.get() << std::endl;
+    }
 
     return 0;
 }
