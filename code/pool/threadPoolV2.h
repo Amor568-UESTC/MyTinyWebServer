@@ -8,7 +8,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <algorithm>
-#include <any>
+#include <cstring>
+#include <atomic>
 
 struct BaseTask {
     virtual ~BaseTask() = default;
@@ -37,6 +38,7 @@ struct TaskImpl : BaseTask {
         return *this;
     }
 
+    // TaskImpl can be destroyed after execute called
     void execute() override {
         try {
             if constexpr (std::is_void_v<T>) {
@@ -75,12 +77,21 @@ public:
         return "UNKNOWN";
     }
 
+#if __cplusplus >= 202002L
     static constexpr Priority str2pri(const char* str) {
         if (str == "LOW") return Priority::LOW;
         if (str == "HIGH") return Priority::HIGH;
         if (str == "URGENT") return Priority::URGENT;
         return Priority::NORMAL;
     }
+#else
+    static Priority str2pri(const char* str) {
+        if (!strcmp(str, "LOW")) return Priority::LOW;
+        if (!strcmp(str, "HIGH")) return Priority::HIGH;
+        if (!strcmp(str, "URGENT")) return Priority::URGENT;
+        return Priority::NORMAL;
+    }
+#endif
 
 private:
     std::unique_ptr<BaseTask> _impl;
@@ -146,9 +157,15 @@ public:
         throw std::bad_cast();
     }
 
+#if __cpluscplus >= 202002L
+    auto operator<=>(const AnyReturnPriTask& other) const {
+        return static_cast<unsigned int>(_pri) <=> static_cast<unsigned int>(other._pri);
+    }
+#else
     bool operator<(const AnyReturnPriTask& other) const {
         return static_cast<unsigned int>(_pri) < static_cast<unsigned int>(other._pri);
     }
+#endif
 
     const Priority& getPriority() const {
         return _pri;
@@ -185,8 +202,8 @@ private:
     std::atomic<bool> _stop{false};
 
     void work() {
-        AnyReturnPriTask* task;
         while (true) {
+            AnyReturnPriTask* task;
             {
                 std::unique_lock<std::mutex> lock(_mtx);
                 _cv.wait(lock, [this]() {
@@ -197,14 +214,17 @@ private:
                     break;
                 }
 
-                task = std::move(_tasks.top());
+                task = _tasks.top();
                 _tasks.pop();
             }
 
             ++_activeThreads;
             task->execute();
             --_activeThreads;
+            // can destroy because execute has been called
+            delete task;
         }
+        
     }
 
     void shutdown() {
@@ -226,6 +246,12 @@ public:
         }
     }
 
+    ThreadPoolV2(size_t threadCnt) {
+        for (size_t i = 0; i < threadCnt; ++i) {
+            _workers.emplace_back([this]() { work(); });
+        }
+    }
+
     ~ThreadPoolV2() {
         shutdown();
     }
@@ -237,7 +263,7 @@ public:
 
         {
             std::lock_guard<std::mutex> lock(_mtx);
-            _tasks.push(std::move(task));
+            _tasks.push(task);
         }
 
         _cv.notify_one();
@@ -259,5 +285,10 @@ public:
 
     bool isStop() const {
         return _stop.load();
+    }
+
+    size_t pendingTasks() {
+        std::lock_guard<std::mutex> lock(_mtx);
+        return _tasks.size();
     }
 };
