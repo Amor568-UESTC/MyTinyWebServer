@@ -120,3 +120,12 @@ bool HttpConn::process()
     LOG_DEBUG("filesize:%d %d to %d",response_.FileLen(),iovCnt_,ToWriteBytes());
     return 1;
 }
+
+#ifdef OPENSSL_FOUND
+bool HttpConn::InitSSL() 
+{
+    if (!isSSL_) 
+    {
+        ssl_ = SSL_
+    }
+}
