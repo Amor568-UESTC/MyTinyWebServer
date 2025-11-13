@@ -8,7 +8,7 @@
 
 #include"../log/log.h"
 #include"../pool/sqlconnRAII.h"
-#include"../buffer/buffer.h"
+#include"../buffer/iobuffer.h"
 #include"httprequest.h"
 #include"httpresponse.h"
 
@@ -20,23 +20,29 @@ private:
 
     bool isClose_;
 
-    int iovCnt_;
-    iovec iov_[2];
-
-    Buffer readBuff_;
-    Buffer writeBuff_;
-
     HttpRequest request_;
     HttpResponse response_;
+
+    //增加一个标志位，表示请求是否已经完成解析
+    bool requestDone_ = false;
+    bool keepAlive_ = false;
+
+protected:
+    IOBuffer readBuff_;
+    IOBuffer writeBuff_;
+
+    int iovCnt_ = 0;
+    iovec iov_[2]{};
     
 public:
     HttpConn();
-    ~HttpConn();
+    virtual ~HttpConn();
 
-    void Init(int sockFd,const sockaddr_in& addr);
-    ssize_t read(int* saveErrno);
-    ssize_t write(int* saveErrno);
-    void Close();
+    virtual void Init(int sockFd,const sockaddr_in& addr);
+    virtual ssize_t read(int* saveErrno);
+    virtual ssize_t write(int* saveErrno);
+    virtual void Close();
+    virtual bool IsReadClose() const { return false; }
 
     int GetFd() const;
     int GetPort() const;
@@ -45,8 +51,8 @@ public:
 
     bool process();
 
-    int ToWriteBytes() {return iov_[0].iov_len+iov_[1].iov_len;}
-    bool IsKeepAlive() const {return request_.IsKeepAlive();}
+    size_t ToWriteBytes() {return iov_[0].iov_len+iov_[1].iov_len;}
+    bool IsKeepAlive() const { return keepAlive_; } //使用自己的变量来判断
 
     static bool isET;
     static const char* srcDir;

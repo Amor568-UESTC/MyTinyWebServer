@@ -1,5 +1,5 @@
 CXX=g++
-CFLAGS=-std=c++14 -O2 -Wall -g
+CFLAGS=-std=c++23 -O2 -Wall -g
 
 TARGET=server
 OBJS=../code/buffer/*.cpp ../code/pool/*.cpp ../code/log/*.cpp \
@@ -7,7 +7,7 @@ OBJS=../code/buffer/*.cpp ../code/pool/*.cpp ../code/log/*.cpp \
 	../code/main.cpp
 
 all:$(OBJS)
-	$(CXX) $(CFLAGS) $(OBJS) -o ../bin/$(TARGET) -pthread -lmysqlclient
+	$(CXX) $(CFLAGS) $(OBJS) -o ../bin/$(TARGET) -pthread -lmysqlclient -lssl -lcrypto
 
 clean:
 	rm -rf ../bin

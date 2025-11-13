@@ -37,7 +37,8 @@ public:
 
 private:
     bool ParseRequestLine_(const std::string& line);
-    void ParseHeader_(const std::string& line);
+    bool ParseHeader_(const std::string& line);
+    bool FinishHeadrs_();
     void ParseBody_(const std::string& line);
 
     void ParsePath_();
@@ -53,6 +54,7 @@ private:
     std::string body_;
     std::unordered_map<std::string,std::string> header_;
     std::unordered_map<std::string,std::string> post_;
+    std::size_t contentLength_ = 0;
 
     static const std::unordered_set<std::string> DEFAULT_HTML;
     static const std::unordered_map<std::string,int> DEFAULT_HTML_TAG;
@@ -63,7 +65,14 @@ public:
     ~HttpRequest()=default;
 
     void Init();
-    bool parse(Buffer& buff);
+
+    //定义更多解析结果
+    enum class ParseRes {
+        NeedMore,
+        Complete,
+        BadRequest,
+    };
+    ParseRes parse(Buffer& buff);
 
     std::string path() const;
     std::string& path();

@@ -7,19 +7,22 @@
 #include<sys/socket.h>
 #include<netinet/in.h>
 #include<arpa/inet.h>
+#include<openssl/ssl.h>
 
 #include"epoller.h"
 #include"../timer/heaptimer.h"
 #include"../pool/sqlconnpool.h"
 #include"../pool/threadpool.h"
 #include"../http/httpconn.h"
-
+#include"../http/httpsconn.h"
+#include"../http/sslContext.h"
 
 
 class WebServer
 {
 private:
     bool initSocket_();
+    bool initSSL_(const char* certPath, const char* keyPath, const char* caPath);
     void InitEventMode_(int trigMode);
     void AddClient_(int fd,sockaddr_in addr);
 
@@ -34,6 +37,7 @@ private:
     void OnRead_(HttpConn* client);
     void OnWrite_(HttpConn* client);
     void OnProcess(HttpConn* client);
+    void OnHandShake(HttpsConn* client);
 
     static const int MAX_FD=65536;
 
@@ -52,13 +56,17 @@ private:
     std::unique_ptr<HeapTimer> timer_;
     std::unique_ptr<ThreadPool> threadpool_;
     std::unique_ptr<Epoller> epoller_;
-    std::unordered_map<int,HttpConn> user_;
+    std::unordered_map<int,std::unique_ptr<HttpConn>> user_;
+
+    bool enableHttps_;
 
 public:
     WebServer(
         int port,int trigMode,int timeoutMS,bool OptLinger,
         int sqlPort,const char* sqlUser,const char* sqlPwd,const char* dbName,
-        int connPoolNum,int threadNum,bool openLog,int logLevel,int logQueSize
+        int connPoolNum,int threadNum,bool openLog,int logLevel,int logQueSize,
+        bool enableHttps,const char* certPath,const char* keyPath,
+        const char* caPath=nullptr
     );
 
     ~WebServer();

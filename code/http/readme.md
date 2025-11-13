@@ -1,342 +1,121 @@
-### HTTP请求类实现
-
-    //根据HTTP请求的结构，使用状态机实现本类，
-    用于逐步解析请求。
-    //关于HTTP请求报文，请学习计算机网络相关内容！
-    这里给一个实例：
-行    GET /index.html HTTP/1.1    
-头    Host: www.example.com
-头    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36
-头    Accept-Language: en-US,en;q=0.5
- 
-体    [空行]
-
-    //GET方法请求体为空
-
-## 枚举类型
-
-    # PARSE_LINE #
-    REQUEST_LINE:请求行
-    HEADERS:请求头
-    BODY:请求体
-    FINISH:完成
-    
-    # HTTP_CODE #
-    NO_REQUEST:没有请求,赋值为0后面依次增加
-    GET_REQUEST:Get请求
-    BAD_REQUEST:坏请求
-    NO_RESOURCE:没有文件
-    FORBIDDEN_REQUEST:拒绝的请求
-    FILE_REQUEST:文件请求
-    INTERNAL_ERROR:服务器错误
-    CLOSED_CONNECT:断开连接
-
-## 类内部私有成员和函数
-
-    # ParseRequestLine_(const string& line)
-    分析请求行。利用正则表达式分析请求行的模式，
-    regex_match函数按照模式捕获line中内容到submatch中，
-    成功则返回1,失败返回0.若成功则将内容分别存储到内部成员，
-    state_设置为HEADERS(下一个状态)，函数返回1；失败则LOG_ERROR并
-    返回0
-
-    # ParseHeader_(connst string& line)
-    分析请求行。方法基本同上，使用regex，smatch和
-    regex_match获取请求行中内容，并存储到header_
-
-    # ParseBody_(const string& line)
-    分析请求体。调用ParsePost_()，将state_转为FINISH
-    并将Body内容LOG_DEBUG
-
-    # ParsePath_()
-    分析GET请求中的路径(URL)，尝试从DEFAUL_HTML中找到
-    对应的选项，添加后缀
-
-    # ParsePost_()
-    查看是否满足POST方法条件，开始分析。本程序POST只有登陆
-    和注册两种，所以要满足header_["Content-Type"]=="application/x-www-form-urlencoded"。即“表单数据”。
-    从中查找出TAG判断是登陆还是注册，调用UserVerify
-    函数进行认证，并得到对应的html：欢迎or错误
-
-    # ParseFromUrlencoded_()
-    URL编码分析。使用双指针i，j分析请求体，“表单数据”的内容格式一般为
-    “key1=value1&key2=value2”，由此逐步分析。其中‘%’为汉字按照
-    UTF-8转换为字节流的形式，使用ConverHex函数转换16进制为10进制。
-    ‘+‘无影响
-
-    # UserVerify(const string& name,const string& pwd,bool isLogin)
-    用户认证。创建sql句柄，使用SqlConnRAII类将连接池实例队列中的
-    空闲连接取出。flag表示是否能够认证成功，order为mysql命令。
-    先尝试select根据username在数据库中查找出username和password，
-    若出错则返回0。(注意为空集合不是出错!)否则将结果存在res中使用
-    mysql_fetch_row捕获结果中的行将查询出的password存储到
-    password字符串中。查看是否在登陆？是则比较pwd和password决定flag。(若没有该用户密码为空)不在登陆(注册)则表明用户名已存在。
-
-    # state_        PARSE_STATE
-    表明此时分析的状态
-
-    # method_       string
-    请求方法，本程序支持了GET和POST方法
-
-    # path_         string
-    请求头中的第二部分，经一系列解析后会变成rss文件夹
-    中的文件路径内容
-
-    # version_      string
-    请求中的HTTP版本
-
-    # body_         string
-    请求体内容
-
-    # header_       unordered_map<string,string>
-    请求头中关于冒号':'两边的key&value对应关系，只有在POST
-    方法时用到了，用于查看是否为“表单数据”
-
-    # post_         unordered_map<string,string>
-    若为POST请求，存储请求体内容中的key&value，用于更新数据库
-
-    # DEFAULT_HTML  static const unordered_set<string>
-    给浏览器准备的HTML页面名
-
-    # DEFUALT_HTML_TAG  unordered_map<string,int>
-    HTML文件对应的标签，主要用于判断为登陆还是注册
+# HTTP / HTTPS 模块说明
 
-    # ConverHex(char ch)
-    将16进制中的字母部分转换为十进制数字
+更新日期：2026-10-19。以下按当前源码说明；修复状态及未完成项见 [HTTPS 已知问题](../../docs/https-known-issues.md)，测试方式见 [测试说明](test/readme.md)。
 
+## 请求解析：HttpRequest
 
-## 类内部公有函数
+HTTP 请求行和每个头字段行以 `\r\n` 结束；头部末尾还有一条空行。因此，最后一个头字段后通常看到 `\r\n\r\n`。请求体由消息长度决定，不按行读取。
 
-    # HttpRequest()
-    调用Init()函数
+```text
+POST /submit HTTP/1.1\r\n
+Host: localhost\r\n
+Content-Type: application/x-www-form-urlencoded\r\n
+Content-Length: 3\r\n
+\r\n
+a=1
+```
 
-    # ~HttpRequest() = default
-    默认析构函数
+上例中的 `\r\n` 表示实际回车换行字节；请求体为 3 字节。
 
-    # Init()
-    将method_,path_,version_,body_,
-    header_,post_置空，state_转为第一个状态
+### 状态与返回结果
 
-    # parse(Buffer& buff)
-    逐步进行分析buff中的内容。根据Http报文结尾格式读取行。
-    然后根据state_逐步调用对应函数进行分析行、头、体。读完
-    buff将buff清空，退出循环，返回成功
+内部解析状态依次为 `REQUEST_LINE → HEADERS → BODY → FINISH`。`parse(Buffer&)` 对外返回 `ParseRes`：
 
-    # path() / method() / version 
-    返回对应的私有成员值
+| 结果 | 含义 | 调用方处理 |
+| --- | --- | --- |
+| `NeedMore` | 当前数据不足，尚不能确定完整请求 | 保留解析状态与未消费字节，继续接收 |
+| `Complete` | 当前请求已完整解析 | 准备响应 |
+| `BadRequest` | 请求格式或当前支持的消息定界不合法 | 准备 400 响应并结束连接 |
 
-    # GetPost(string& key) / (const char* key)
-    返回post_中key对应的的value
+源码仍保留旧的 `HTTP_CODE` 枚举，但当前 `parse()` 的返回类型是 `ParseRes`。
 
-    # IsKeepAlive() const
-    返回header_中是否有{"Connection","keep-alive"}
-    (表明正在保持连接)，以及版本是否为1.1
+- `ParseRequestLine_()` 提取方法、路径和版本；`ParsePath_()` 将首页及部分无后缀页面名映射到资源路径。
+- `ParseHeader_()` 校验字段名和字段值，头字段名统一转为小写。先检查全部字符，再保存一次字段。
+- `FinishHeadrs_()` 在空行处校验消息定界：拒绝当前未支持的 Transfer-Encoding，用 `from_chars` 完整解析非负 Content-Length，拒绝重复或非法长度；缺失长度时请求体长度为 0。
+- BODY 状态等待完整的 `contentLength_` 字节，消费当前请求体，不吞掉下一请求的数据。
+- `ParsePost_()` 根据小写字段名 `content-type` 识别表单类型，也接受媒体类型后的参数。`ParseFromUrlencoded_()` 写入 `post_`，登录、注册路径再通过 `UserVerify()` 访问 SQL 连接池。
+- `Init()` 清空请求数据并回到 REQUEST_LINE。分段接收时不能每次调用它，否则会丢失前一段的解析状态。
 
+`IsKeepAlive()` 当前要求 HTTP/1.1 且 Connection 中有完整的 `keep-alive` 选项，同时没有 `close`。选项按逗号拆分、去除两端空格/制表符并忽略大小写；当前实现并不默认保持所有 HTTP/1.1 连接。
 
+## 文件响应：HttpResponse
 
-### HTTP回应类实现
+`Init(srcDir, path, isKeepAlive, code)` 先释放旧映射，再初始化当前响应。`MakeResponse(Buffer&)` 准备状态行、响应头及文件内容引用。
 
-    //Http回应报文实例如下: 
-行    HTTP/1.1 200 OK
-头    Content-Type: text/html; charset=UTF-8
-    Content-Length: 1234
-    Server: Apache/2.4.1
+文件路径通过 `OpenFile_()` 打开：
 
-体    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>示例页面</title>
-    </head>
-    <body>请求成功</body>
-    </html>
+1. 资源目录以目录 fd 表示。
+2. 去掉 URL 路径开头的 `/`，相对于目录 fd 调用 Linux `openat2`。
+3. 使用 `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` 限制越出资源目录和符号链接。
+4. 对已打开的 fd 使用 `fstat`，确认普通文件及当前代码要求的读取权限；错误页面也走同样的打开路径。
 
-## 类内部私有成员和函数
+这一路径依赖 Linux 内核支持 `openat2`，目前没有旧内核兼容回退。
 
-    # AddStateLine_(Buffer& buff)
-    往buff中添加响应行。如果在COUDE_STATUS中找到code_，
-    设置好对应的状态，否则code_=400，表示Bad Request，
-    将状态行格式内容放入buff中
+`MapFile_(int srcFd)` 接收并接管已经打开的 fd：
 
-    # AddHeader_(Buffer& buff)
-    添加响应头。本程序只要最简单的响应头，先添加Connection,
-    再添加Content-type，还有一个Content-length在下个函数
-    中添加
+- 空文件直接关闭 fd 并返回成功，不建立映射。
+- 非空文件用 `mmap(PROT_READ, MAP_PRIVATE)` 建立映射，失败时比较 `MAP_FAILED`，不解引用失败指针。
+- 成功和失败路径均关闭 fd；成功的映射继续由当前响应对象持有，失败时清空指针和长度、设置状态 500 并返回 false。
+- `File()` 返回映射地址，`FileLen()` 返回记录的文件长度；`UnmapFile()` 释放映射。
 
-    # AddContent_(Buffer& buff)
-    添加响应体。打开对应的文件描述符(只读)，打开失败调用
-    ErrorContent函数；成功则将文件放到到内存映射区，利用
-    共享内存提高进程间通信效率。若映射失败，调用ErrorContent
-    生成错误Html文件作为响应体内容。设置mmFile_为函数返回值，
-    即映射区首地址。关闭文件描述符，buff中添加Content-length
-    内容
+`MakeResponse()` 先确定文件映射结果，再生成状态行和响应头。文件准备成功时输出对应 Content-Length；无法准备文件时生成内联 HTML 错误正文，其 Content-Length 按实际正文计算。映射失败返回 `500 Internal Server Error`，内联错误响应使用 HTML 类型。
 
-    # ErrorHtml_()
-    根据code_状态码，得到对应的html文件，使用stat函数
-    将文件信息放入mmFileStat_结构中
+文件正文没有复制进 `writeBuff_`。每个响应持有自己的映射，这不是跨连接的文件缓存。只有旧响应不再被发送使用时，才能释放其映射。
 
-    # GetFileType_()
-    获取文件类型，根据文件后缀，在SUFFIX_TYPE中寻找对应
-    文件的Content-type，找不到默认为文本文件
+普通文件、空文件、映射失败及 404 回退等行为由 [文件响应回归](test/httpresponseTest.cpp) 覆盖。
 
-    # code_         int
-    响应状态码
+## 普通连接：HttpConn
 
-    # isKeepAlive_  bool
-    是否保持连接状态
+`Init(fd, addr)` 初始化连接，清空读写缓冲区、解析状态及两段 `iovec`。
 
-    # path_         string
-    文件路径名称
+| 成员或接口 | 当前作用 |
+| --- | --- |
+| `readBuff_` / `writeBuff_` | `IOBuffer`，分别保存收到的数据和待发送的响应头/内联错误正文 |
+| `iov_[0]` | 指向 writeBuff_ 中尚未发送的部分 |
+| `iov_[1]` | 指向文件映射中尚未发送的部分 |
+| `requestDone_` | 标识上一请求是否已完成解析，用于下一次处理时重置请求 |
+| `keepAlive_` | 当前响应完成后是否继续处理连接 |
+| `ToWriteBytes()` | 返回两个 iovec 剩余长度之和，类型为 size_t |
+| `read()` / `write()` | 返回 ssize_t；有进展时返回本轮累计字节数，否则返回最后一次结果 |
 
-    # srcDir_       string
-    源文件夹路径
+`process()` 的处理流程：
 
-    # mmFile        char*
-    文件在映射区的首地址
+1. 仅在上一请求已完成后重置请求解析器。
+2. 调用 `parse()`；NeedMore 时返回 false，暂不构造响应。
+3. Complete 时准备正常响应，BadRequest 时准备 400 响应。
+4. 结合请求的 Keep-Alive 选项、读方向关闭状态和缓冲中的后续数据决定 `keepAlive_`。
+5. 构造响应，并让 iovec 指向响应缓冲区和可用的文件映射。
 
-    # mmFileStat    stat
-    文件结构，保存了文件的各类信息
+`write()` 使用 `writev`，成功后推进对应 iovec 和缓冲区位置。返回正数仍可能有数据未发完，上层必须检查 `ToWriteBytes()`。`Close()` 释放当前映射并关闭 fd。
 
-    # SUFFIX_TYPE   unordered_map<string,string>
-    后缀类型在响应头中的Content type
+## TLS 连接：HttpsConn 与 SSLContext
 
-    # CODE_STATUS   unordered_map<int,string>
-    响应状态码对应的意义
+`SSLContext` 加载服务器证书和私钥、检查匹配并创建共享的 `SSL_CTX`。它的 `caPath` 参数用于启用客户端证书校验；向服务器传入 CA 文件会要求客户端提供证书，不等同于让浏览器自动信任服务器证书。
 
-    # CODE_PATH     unordered_map<int,string>
-    各响应状态码的文件名称
+每条 `HttpsConn` 通过 `InitSSL()` 创建独立的 `SSL*`、绑定非阻塞 fd，再由服务器调用 `SSLHandShake()` 驱动握手。握手返回 Done、WantRead、WantWrite 或 Failed。
 
+握手完成后，读写同时维护：
 
-## 类内部公有函数
+| 状态 | 含义 |
+| --- | --- |
+| `IOState::Ready` | 当前没有等待事件或失败 |
+| `IOState::WantRead / WantWrite` | 恢复操作所需的事件方向 |
+| `IOState::Closed / Failed` | 当前操作遇到正常关闭或致命失败 |
+| `PendingOp::Read / Write` | 需要恢复的原始操作 |
+| `readClosed_` | 持久记录对端已停止发送应用数据，不随下次读写重置 |
 
-    # HttpResponse()
-    初始化状态码-1,字符串都为空，isKeepAlive_为0
-    表示尚未连接，mmFile_和mmFileStat_分别为空指针
-    和0
+等待方向与操作类型不能混为一谈：SSL_write 遇到 WANT_READ 时，应等待可读后恢复写操作。
 
-    # ~HttpResponse()
-    调用UnmapFile()函数
+TLS 读取使用最多 16 KiB 的缓冲区；`HttpsConn::write()` 和 `IOBuffer::WriteSSL()` 均限制单次提交最多 16 KiB。仅成功发送后推进指针，WANT 重试时保留原来的数据和长度。
 
-    # Init(const string& srcDir,string& path,bool isKeepAlive,int code)
-    初始化函数，把code_,isKeepAlive_,path_,srcDir_按照
-    函数参数初始化，mmFile_和mmFileStat_仍为空
+正常读关闭后，已收到的完整请求仍可生成响应；请求不完整且不会再有数据时结束连接。本端非阻塞正常关闭的重试，以及线程与资源生命周期协调尚未实现。
 
-    # MakeResponse(Buffer& buff)
-    制作响应报文到buff中。先使用stat函数将文件信息存入
-    mmFileStat_中，若失败或者非文件：404,若不可读取：
-    403Forbidden,若code=-1，表示刚初始化，200OK。调用
-    ErrorHtml_函数根据code_选择文件，最后依次添加行，
-    头，体
+## 与 WebServer 的配合
 
-    # UnmapFile()
-    取消内存映射，将mmFile_置空
+- 握手尚未完成时，读写入口先驱动握手。
+- 事件分发优先恢复 TLS 挂起操作；无挂起操作时，已有响应且可写则先发送，再处理普通可读/读关闭事件。
+- `OnRead_()` 先处理 TLS 状态，再进入请求处理；读到正常关闭不直接丢弃缓冲数据。
+- `OnProcess()` 为已构造响应监听 EPOLLOUT，为需要更多数据的请求监听 EPOLLIN。
+- `OnWrite_()` 先处理 TLS 状态和挂起操作，再进行 HTTP/HTTPS 共用的剩余数据检查；发送完成后根据 Keep-Alive 决定继续处理或关闭。
 
-    # File() 
-    返回mmFile_的值，即文件映射开头地址
-
-    # FileLen()
-    返回文件长度
-
-    # ErrorContent(Buffer& buff,string message)
-    生成响应体内容，并添加到buff中
-
-    # Code() const 
-    返回code_值
-
-
-
-### 使用上面两类实现HTTP连接类
-
-
-## 类内部私有成员和函数
-
-    # fd_           int
-    连接描述符
-
-    # addr_         sockaddr_in
-    与客户端绑定的addr地址
-
-    # isClose_      bool
-    是否关闭标志
-
-    # iovCnt_       int
-    iov数组的数目
-
-    # iov_[2]       iovec
-    iovec数组，iov_[0]存放writeBuff_内容，
-    iov_[1]存放文件内容，一起往fd_中写
-
-    # readBuff_     Buffer
-    读缓冲区，读取请求报文request_
-
-    # writeBuff_    Buffer
-    写缓冲区,存放响应报文的行、头内容，被iov_[0]捕获
-
-    # request_      HttpRequest
-    请求类对象
-
-    # response_     HttpResponse
-    回应类对象
-
-
-## 类内部公有函数
-
-    # HttpConn()
-    初始化fd_为-1,addr_为0,isClose_为1
-
-    # ~HttpConn()
-    调用Close()函数
-
-    # Init(int sockFd,const sockaddr_in& addr)
-    初始化函数。userCnt++客户数目加一，根据函数各个参数
-    初始化类内部成员，读写缓冲区全部清空，isClose_为0表示
-    开启
-
-    # read(int* saveErrno)
-    从fd_中读取到readBuff_,若为ET边缘触发模式则保持循环
-
-    # write(int* saveErrno)
-    从iov_向fd_中写入数据。当写完或者发生错误时停止。若总长度大于
-    单个iov_[0]的长度，说明iov_[0]中内容已经写完，还写了部分iov_[1]
-    中的内容，iov_[1]偏移，因为已经写完iov_[0]内容，所以可以清空
-    writeBuff_；若总长度小于iov_[0]长度，iov_[0]偏移，并且移动
-    writeBuff_中readPos_.满足循环条件为isET或iov_中数据量大于10KB
-    返回len长度，即最后一次写的长度
-
-    # Close()
-    调用response_.UnmapFile()函数取消内存映射，isCLose_
-    标志状态置1,减少UserCnt，关闭fd_
-
-    # GetFd() const
-    返回fd_
-
-    # GerPort() const
-    返回addr_.sin_port
-
-    # GetIP() const
-    返回inet_ntoa(addr_.sin_addr)
-    (网络端转主机端)
-
-    # GetAddr() const
-    返回addr_
-
-    # process()
-    整体运作流程函数。先初始化request_，查看readBuff_
-    尝试解析readBUff_中的Http请求报文，若解析成功则初始化
-    response_为200OK,否则为400Bad request.调用MakeResponse
-    函数向writeBuff_中写响应报文。使用iov_[0]存放写入的内容，
-    iov_[1]存放内存映射的文件内容。返回流程运作成功
-
-    # ToWriteBytes()
-    返回iov_[0]和iov_[1]的长度和，即将要写入的响应报文长度
-
-    # IsKeepAlive()
-    返回request_.IsKeepAlive()
-
-    # isET      static 
-    是否边缘触发标志
-
-    # srcDir    static const char*
-    本地源文件夹路径
-
-    # userCnt   atomic<int>
-    客户数量，原子性
+登录、注册依赖正确配置的 MySQL 连接池；本轮 HTTP/TLS 边界回归未覆盖全部数据库业务。

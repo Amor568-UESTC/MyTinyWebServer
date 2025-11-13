@@ -14,7 +14,8 @@ class HttpResponse
 private:
     void AddStateLine_(Buffer& buff);
     void AddHeader_(Buffer& buff);
-    void AddContent_(Buffer &buff);
+    int OpenFile_() const;
+    bool MapFile_(int srcFd);
 
     void ErrorHtml_();
     std::string GetFileType_();

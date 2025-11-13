@@ -1,5 +1,9 @@
 #include"httpresponse.h"
 
+#include <cerrno>
+#include <linux/openat2.h>
+#include <sys/syscall.h>
+
 using namespace std;
 
 const unordered_map<std::string,std::string> HttpResponse::SUFFIX_TYPE=
@@ -31,6 +35,7 @@ const unordered_map<int,std::string> HttpResponse::CODE_STATUS=
     {400,"Bad Request"},
     {403,"Forbidden"},
     {404,"Not Found"},
+    {500, "Internal Server Error"},
 };
 
 const unordered_map<int,std::string> HttpResponse::CODE_PATH=
@@ -62,36 +67,66 @@ void HttpResponse::AddHeader_(Buffer& buff)
         buff.Append("keep-alive: max=6, timeout=120\r\n");
     }
     else buff.Append("close\r\n");
-    buff.Append("Content-type: "+GetFileType_()+"\r\n");
+    //暂时没有500的html页面
+    const string type = code_ >= 400 && !mmFile_ ?
+        "text/html; charset=utf-8" : GetFileType_();
+    buff.Append("Content-type: " + type + "\r\n");
 }
 
-void HttpResponse::AddContent_(Buffer &buff)
-{
-    int srcFd=open((srcDir_+path_).data(),O_RDONLY);
-    if(srcFd<0)
-    {
-        ErrorContent(buff,"File NotFound!");
-        return ;
+int HttpResponse::OpenFile_() const {
+    if (path_.empty() || path_.front() != '/' ||
+        path_.find('\0') != string::npos) {
+        errno = EINVAL;
+        return -1;
     }
-    LOG_DEBUG("file path %s",(srcDir_+path_).data());
+
+    int rootFd = open(srcDir_.c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC);
+    if (rootFd < 0) {
+        return -1;
+    }
+
+    struct open_how how{};
+    how.flags = O_RDONLY | O_CLOEXEC | O_NONBLOCK;
+    how.resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS;
+
+    //去掉URL开头的"/",相对于资源目录打开
+    int fd = static_cast<int>(
+        syscall(SYS_openat2, rootFd, path_.c_str() + 1, &how, sizeof(how))
+    );
+
+    //先保存错误码,避免后面close覆盖
+    int saveErrno = errno;
+    close(rootFd);
+    if (fd < 0) {
+        errno = saveErrno;
+    }
+    return fd;
+}
+
+bool HttpResponse::MapFile_(int srcFd) {
+    if (mmFileStat_.st_size == 0) {
+        close(srcFd);
+        return true;
+    }
+
     //文件映射到内存
-    int* mmRet=(int*)mmap(0,mmFileStat_.st_size,PROT_READ,MAP_PRIVATE,srcFd,0);
-    if(*mmRet==-1)
-    {
-        ErrorContent(buff,"File NotFound!");
-        return ;
-    }
-    mmFile_=(char*)mmRet;
+    void* mmRet = mmap(nullptr, mmFileStat_.st_size, PROT_READ, MAP_PRIVATE, srcFd, 0);
     close(srcFd);
-    buff.Append("Content-length: "+to_string(mmFileStat_.st_size)+"\r\n\r\n");
+    if (mmRet == MAP_FAILED) { //使用MAP_FAILED来判断
+        mmFile_ = nullptr;
+        mmFileStat_ = {};
+        code_ = 500;
+        return false;
+    }
+
+    mmFile_ = static_cast<char*>(mmRet);
+    return true;
 }
 
 void HttpResponse::ErrorHtml_()
 {
-    if(CODE_PATH.count(code_))
-    {
-        path_=CODE_PATH.find(code_)->second;
-        stat((srcDir_+path_).data(),&mmFileStat_);
+    if (CODE_PATH.count(code_)) {
+        path_ = CODE_PATH.find(code_)->second;
     }
 }
 
@@ -119,26 +154,71 @@ HttpResponse::~HttpResponse() { UnmapFile();}
 void HttpResponse::Init(const std::string& srcDir,std::string& path,bool isKeepAlive,int code)
 {
     assert(srcDir!="");
+    UnmapFile(); //释放旧映射
     code_=code;
     isKeepAlive_=isKeepAlive;
     path_=path;
     srcDir_=srcDir;
-    mmFile_=nullptr;
-    mmFileStat_={0};
+    mmFileStat_ = {};
 }
 
 void HttpResponse::MakeResponse(Buffer& buff)
 {
-    if(stat((srcDir_+path_).data(),&mmFileStat_)<0||S_ISDIR(mmFileStat_.st_mode))
-        code_=404;
-    else if(!(mmFileStat_.st_mode&S_IROTH))
-        code_=403;
-    else if(code_==-1)
-        code_=200;
-    ErrorHtml_();
+    int srcFd =OpenFile_();
+    if (srcFd < 0) {
+        switch (errno) {
+            case EXDEV: //尝试越出资源链接
+            case ELOOP: //包含符号链接
+            case EACCES:
+            case EPERM:
+                code_ = 403;
+                break;
+            case EINVAL:
+                code_ = 400;
+                break;
+            default:
+                code_ = 404;
+                break;
+        }
+    } else if (fstat(srcFd, &mmFileStat_) < 0 ||
+               !S_ISREG(mmFileStat_.st_mode)) {
+        code_ = 404;
+    } else if (!(mmFileStat_.st_mode & S_IROTH)) {
+        code_ = 403;
+    } else if (code_ == -1) {
+        code_ = 200;
+    }
+
+    //错误页面也通过OpenFile_()打开,不直接拼路径
+    if (CODE_PATH.count(code_)) {
+        if (srcFd >= 0) {
+            close(srcFd);
+        }
+        mmFileStat_ = {};
+        ErrorHtml_();
+        srcFd = OpenFile_();
+        if (srcFd >= 0 &&
+            (fstat(srcFd, &mmFileStat_) < 0 ||
+            !S_ISREG(mmFileStat_.st_mode) ||
+            !(mmFileStat_.st_mode & S_IROTH))) {
+            close(srcFd);
+            srcFd = -1;
+        }
+    }
+    // 在输出状态行之前完成映射，确保状态码与实际响应一致。
+    const bool fileReady = srcFd >= 0 && MapFile_(srcFd);
+    if (!fileReady) {
+        mmFile_ = nullptr;
+        mmFileStat_ = {};
+    }
+
     AddStateLine_(buff);
     AddHeader_(buff);
-    AddContent_(buff);
+    if (fileReady) {
+        buff.Append("Content-length: " + to_string(FileLen()) + "\r\n\r\n");
+    } else {
+        ErrorContent(buff, code_ == 500 ? "File mapping failed!" : "File unavailable!");
+    }
 }
 
 void HttpResponse::UnmapFile()
