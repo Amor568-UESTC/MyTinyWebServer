@@ -23,9 +23,13 @@ private:
 public:
     static SSLContext& GetInstance();
 
-    bool Initialize(const std::string& certPaht, 
+    bool Initialize(const char* certPath,
+        const char* keyPath,
+        const char* caPath = nullptr);
+
+    bool Initialize(const std::string& certPath,
         const std::string& keyPath,
-        const std::string& caPath);
+        const std::string& caPath = "");
 
     SSL_CTX* GetContext() const { return ctx_.get(); }
 };

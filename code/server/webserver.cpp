@@ -73,6 +73,11 @@ bool WebServer::initSocket_()
     return 1;
 }
 
+bool WebServer::initSSL_(const char* certPath,const char* keyPath,const char* caPath) 
+{
+    return SSLContext::GetInstance().Initialize(certPath, keyPath, caPath);
+}
+
 void WebServer::InitEventMode_(int trigMode)
 {
     listenEvent_=EPOLLRDHUP;
@@ -219,8 +224,11 @@ WebServer::WebServer(
     int port,int trigMode,int timeoutMS,bool OptLinger,
     int sqlPort,const char* sqlUser,const char* sqlPwd,const char* dbName,
     int connPoolNum,int threadNum,bool openLog,int logLevel,int logQueSize
+    bool enableHttps,const char* certPath,const char* keyPath,
+    const char* caPath=nullptr
 ):  port_(port),openLinger_(OptLinger),timeoutMS_(timeoutMS),isClose_(0),
-    timer_(new HeapTimer()),threadpool_(new ThreadPool(threadNum)),epoller_(new Epoller())
+    timer_(new HeapTimer()),threadpool_(new ThreadPool(threadNum)),epoller_(new Epoller()),
+    enableHttps_(enableHttps)
 {
     srcDir_=getcwd(nullptr,256);
     assert(srcDir_);
@@ -230,6 +238,9 @@ WebServer::WebServer(
     SqlConnPool::Instance()->Init("localhost",sqlPort,sqlUser,sqlPwd,dbName,connPoolNum);
     InitEventMode_(trigMode);
     if(!initSocket_()) isClose_=1;
+    if(enableHttps_&&certPath&&keyPath&&)
+        if(!initSSL_(certPath,keyPath,caPath))
+            isClose_=true;
     if(openLog)
     {
         Log::Instance()->init(logLevel,"./log",".log",logQueSize);

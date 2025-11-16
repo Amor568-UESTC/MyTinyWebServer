@@ -2,13 +2,17 @@
 #include "../log/log.h"
 
 SSLContext& SSLContext::GetInstance() {
-    static SSLContext instance;
+    static SSLContext instance; // automatic multi-threaded concurrency control
     return instance;
 }
 
-bool SSLContext::Initialize(const std::string& certPath, 
-    const std::string& keyPath,
-    const std::string& caPath) {
+bool SSLContext::Initialize(const char* certPath,
+    const char* keyPath,
+    const char* caPath = nullptr) {
+    if (initialized_) {
+        return false;
+    }
+
     // initalize OpenSSL
     SSL_library_init();
     SSL_load_error_strings();
@@ -26,13 +30,13 @@ bool SSLContext::Initialize(const std::string& certPath,
     SSL_CTX_set_mode(ctx_.get(), SSL_MODE_ENABLE_PARTIAL_WRITE);
 
     // load cert and key
-    if (SSL_CTX_use_certificate_file(ctx_.get(), certPath.c_str(), SSL_FILETYPE_PEM) <= 0) {
-        LOG_ERROR("SSL_CTX_use_certificate_file failed: %s", certPath.c_str());
+    if (SSL_CTX_use_certificate_file(ctx_.get(), certPath, SSL_FILETYPE_PEM) <= 0) {
+        LOG_ERROR("SSL_CTX_use_certificate_file failed: %s", certPath);
         return false;
     }
 
-    if (SSL_CTX_use_PrivateKey_file(ctx_.get(), keyPath.c_str(), SSL_FILETYPE_PEM) <= 0) {
-        LOG_ERROR("SSL_CTX_use_PrivateKey_file failed: %s", keyPath.c_str());
+    if (SSL_CTX_use_PrivateKey_file(ctx_.get(), keyPath, SSL_FILETYPE_PEM) <= 0) {
+        LOG_ERROR("SSL_CTX_use_PrivateKey_file failed: %s", keyPath);
         return false;
     }
 
@@ -42,8 +46,8 @@ bool SSLContext::Initialize(const std::string& certPath,
     }
 
     // load CA(optional for client cert verify)
-    if (!caPath.empty()) {
-        if (SSL_CTX_load_verify_locations(ctx_.get(), caPath.c_str(), nullptr) <= 0) {
+    if (!caPath) {
+        if (SSL_CTX_load_verify_locations(ctx_.get(), caPath, nullptr) <= 0) {
             LOG_ERROR("SSL_CTX_load_verify_locations failed");
             return false;
         }
@@ -55,3 +59,11 @@ bool SSLContext::Initialize(const std::string& certPath,
     return true;
 }
 
+bool SSLContext::Initialize(const std::string& certPath,
+    const std::string& keyPath,
+    const std::string& caPath = "") {
+    if (caPath.empty()) {
+        return Initialize(certPath.c_str(), keyPath.c_str());
+    }
+    return Initialize(certPath.c_str(), keyPath.c_str(), caPath.c_str());
+}

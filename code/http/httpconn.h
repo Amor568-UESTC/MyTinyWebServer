@@ -5,15 +5,16 @@
 #include<arpa/inet.h>
 #include<stdlib.h>
 #include<errno.h>
-#ifdef OPENSSL_FOUND
-#include <openssl/ssl.h>
-#endif
+#include<openssl/ssl.h>
 
 #include"../log/log.h"
 #include"../pool/sqlconnRAII.h"
 #include"../buffer/buffer.h"
 #include"httprequest.h"
 #include"httpresponse.h"
+
+// convenience for dev
+#define OPENSSL_FOUND
 
 class HttpConn
 {
@@ -33,16 +34,16 @@ private:
     HttpResponse response_;
 
 #ifdef OPENSSL_FOUND
-    SSL* ssl_ = nullptr;
-    bool isSSL_ = false;
-    bool sslHandShakeDone_ = false;
+    SSL* ssl_=nullptr;
+    bool isSSL_=false;
+    bool sslHandShakeDone_=false;
 #endif
     
 public:
     HttpConn();
     ~HttpConn();
 
-    void Init(int sockFd,const sockaddr_in& addr);
+    void Init(int sockFd,const sockaddr_in& addr,bool isSSL);
     ssize_t read(int* saveErrno); // to be changed
     ssize_t write(int* saveErrno); // to be changed
     void Close();
@@ -65,9 +66,11 @@ public:
     bool InitSSL();
     bool SSLHandShake();
 
+private:
     ssize_t SSLRead(int* saveErrno);
     ssize_t SSLWrite(int* saveErrno);
 
+public:
     bool isSSL() const {return isSSL_;}
     bool isSSLHandShakeDone() const {return sslHandShakeDone_;}
 #endif
