@@ -110,3 +110,100 @@ ssize_t Buffer::WriteFd(int fd,int* Errno)
     readPos_+=len;
     return len;
 }
+
+#ifdef OPENSSL_FOUND
+ssize_t Buffer::SSLReadFd(SSL* ssl,int* Errno)
+{
+    if(!ssl) 
+    {
+        if(Errno) *Errno=EBADF;
+        return -1;
+    }
+
+    char buff[65535];
+    ssize_t len=-1;
+    ssize_t totalRead=0;
+
+    // first read to writable space
+    const size_t writable=WritableBytes();
+    if(writable>0)
+    {
+        len=SSL_read(ssl,BeginWrite(),writable);
+        if(len>0)
+        {
+            HasWritten(len);
+            totalRead+=len;
+        }
+    }
+
+    // then read to tmp buffer
+    if(len>0)
+    {
+        while(true)
+        {
+            len=SSL_read(ssl,buff,sizeof(buff));
+            if(len<=0) break;
+            Append(buff,len);
+            totalRead+=len;
+        }
+    }
+    else // first read failed
+    {
+        len=SSL_read(ssl,buff,sizeof(buff));
+        if(len>0)
+        {
+            Append(buff,len);
+            totalRead+=len; 
+        }
+    }
+
+    if(len<=0 && totalRead==0)
+    {
+        int sslError=SSL_get_error(ssl,len);
+        if(Errno) *Errno=sslError;
+
+        switch(sslError)
+        {
+            case SSL_ERROR_WANT_READ:
+            case SSL_ERROR_WANT_WRITE:
+                return -1;
+            case SSL_ERROR_ZERO_RETURN:
+                return 0;
+            default:
+                return -1;
+        }
+    }
+
+    return totalRead;
+}
+
+ssize_t Buffer::SSLWriteFd(SSL* ssl,int* Errno)
+{
+    if(!ssl) 
+    {
+        if(Errno) *Errno=EBADF;
+        return -1;
+    }
+
+    size_t readable=ReadableBytes();
+    if(readable==0) return 0;
+
+    ssize_t len=SSL_write(ssl,Peek(),readable);
+    if(len<=0)
+    {
+        int sslError=SSL_get_error(ssl,len);
+        if(Errno) *Errno=sslError;
+
+        switch(sslError)
+        {
+            case SSL_ERROR_WANT_READ:
+            case SSL_ERROR_WANT_WRITE:
+                return -1; // need retry
+            default:
+                return -1;
+        }
+    }
+    readPos_+=len;
+    return len;
+}
+#endif

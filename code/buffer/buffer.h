@@ -7,6 +7,9 @@
 #include<vector>
 #include<atomic>
 #include<assert.h>
+#include<openssl/ssl.h>
+
+#define OPENSSL_FOUND
 
 class Buffer
 {
@@ -46,4 +49,9 @@ public:
 
     ssize_t ReadFd(int fd,int* Errno);
     ssize_t WriteFd(int fd,int* Errno);
+
+#ifdef OPENSSL_FOUND
+    ssize_t SSLReadFd(SSL* ssl,int* Errno);
+    ssize_t SSLWriteFd(SSL* ssl,int* Errno);
+#endif
 };

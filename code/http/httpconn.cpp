@@ -266,8 +266,11 @@ ssize_t HttpConn::SSLRead(int* saveErrno)
     ssize_t len=-1;
     do
     {
-        // maybe I should expend my Buffer?
-    }
+        len=readBuff_.SSLReadFd(ssl_,saveErrno);
+        if(len<=0) break;
+    } while (isET);
+
+    return len;
 }
 
 ssize_t HttpConn::SSLWrite(int* saveErrno)
@@ -294,6 +297,8 @@ ssize_t HttpConn::SSLWrite(int* saveErrno)
                 return -1;
             }
         }
+
+    return writeBuff_.SSLWriteFd(ssl_,saveErrno);
 }
 
 
