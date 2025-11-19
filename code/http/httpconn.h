@@ -9,7 +9,7 @@
 
 #include"../log/log.h"
 #include"../pool/sqlconnRAII.h"
-#include"../buffer/buffer.h"
+#include"../buffer/iobuffer.h"
 #include"httprequest.h"
 #include"httpresponse.h"
 
@@ -27,8 +27,8 @@ private:
     int iovCnt_;
     iovec iov_[2];
 
-    Buffer readBuff_;
-    Buffer writeBuff_;
+    IOBuffer readBuff_;
+    IOBuffer writeBuff_;
 
     HttpRequest request_;
     HttpResponse response_;
@@ -44,8 +44,8 @@ public:
     ~HttpConn();
 
     void Init(int sockFd,const sockaddr_in& addr,bool isSSL);
-    ssize_t read(int* saveErrno); // to be changed
-    ssize_t write(int* saveErrno); // to be changed
+    ssize_t read(int* saveErrno);
+    ssize_t write(int* saveErrno);
     void Close();
 
     int GetFd() const;
@@ -65,10 +65,6 @@ public:
 #ifdef OPENSSL_FOUND
     bool InitSSL();
     bool SSLHandShake();
-
-private:
-    ssize_t SSLRead(int* saveErrno);
-    ssize_t SSLWrite(int* saveErrno);
 
 public:
     bool isSSL() const {return isSSL_;}
