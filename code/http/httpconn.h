@@ -5,16 +5,12 @@
 #include<arpa/inet.h>
 #include<stdlib.h>
 #include<errno.h>
-#include<openssl/ssl.h>
 
 #include"../log/log.h"
 #include"../pool/sqlconnRAII.h"
 #include"../buffer/iobuffer.h"
 #include"httprequest.h"
 #include"httpresponse.h"
-
-// convenience for dev
-#define OPENSSL_FOUND
 
 class HttpConn
 {
@@ -27,26 +23,21 @@ private:
     int iovCnt_;
     iovec iov_[2];
 
-    IOBuffer readBuff_;
-    IOBuffer writeBuff_;
-
     HttpRequest request_;
     HttpResponse response_;
 
-#ifdef OPENSSL_FOUND
-    SSL* ssl_=nullptr;
-    bool isSSL_=false;
-    bool sslHandShakeDone_=false;
-#endif
+protected:
+    IOBuffer readBuff_;
+    IOBuffer writeBuff_;
     
 public:
     HttpConn();
-    ~HttpConn();
+    virtual ~HttpConn();
 
-    void Init(int sockFd,const sockaddr_in& addr,bool isSSL);
-    ssize_t read(int* saveErrno);
-    ssize_t write(int* saveErrno);
-    void Close();
+    virtual void Init(int sockFd,const sockaddr_in& addr);
+    virtual ssize_t read(int* saveErrno);
+    virtual ssize_t write(int* saveErrno);
+    virtual void Close();
 
     int GetFd() const;
     int GetPort() const;
@@ -61,13 +52,4 @@ public:
     static bool isET;
     static const char* srcDir;
     static std::atomic<int> userCnt;
-
-#ifdef OPENSSL_FOUND
-    bool InitSSL();
-    bool SSLHandShake();
-
-public:
-    bool isSSL() const {return isSSL_;}
-    bool isSSLHandShakeDone() const {return sslHandShakeDone_;}
-#endif
 };

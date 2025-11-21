@@ -17,7 +17,7 @@ HttpConn::HttpConn()
 
 HttpConn::~HttpConn() { Close();}
 
-void HttpConn::Init(int sockFd,const sockaddr_in& addr,bool isSSL)
+void HttpConn::Init(int sockFd,const sockaddr_in& addr)
 {
     assert(sockFd>0);
     userCnt++;
@@ -26,44 +26,27 @@ void HttpConn::Init(int sockFd,const sockaddr_in& addr,bool isSSL)
     writeBuff_.RetrieveAll();
     readBuff_.RetrieveAll();
     isClose_=0;
-#ifdef OPENSSL_FOUND
-    isSSL_=isSSL;
-    if(ssl_)
-    {
-        SSL_shutdown(ssl_);
-        SSL_free(ssl_);
-        ssl_=nullptr;
-    }
-    if(isSSL_)
-        if(!InitSSL())
-        {
-            LOG_ERROR("Failed to initialize SSL for fd: %d. Continue without SSL",fd_);
-            isSSL_=false;
-        }
-#endif
-    LOG_INFO("Client[%d](%s:%d) in, userCount:%d. SSL: %s",
-        fd_,GetIP(),GetPort(),(int)userCnt,isSSL_);
+
+    LOG_INFO("Client[%d](%s:%d) in, userCount:%d.",
+        fd_,GetIP(),GetPort(),(int)userCnt);
 }
 
 ssize_t HttpConn::read(int* saveErrno)
 {
-#ifdef OPENSSL_FOUND
-    if(isSSL_) return SSLRead(saveErrno);
-#endif
+    ssize_t totalLen=0;
     ssize_t len=-1;
     do
     {
         len=readBuff_.ReadFd(fd_,saveErrno);
-        if(len<=0) break;
+        if(len>0) totalLen+=len;
+        else break;
     } while (isET);
-    return len;
+    return totalLen>0?totalLen:len;
 }
 
 ssize_t HttpConn::write(int* saveErrno)
 {
-#ifdef OPENSSL_FOUND
-    if(isSSL_) return SSLWrite(saveERRno);
-#endif
+    ssize_t totalLen=0;
     ssize_t len=-1;
     do
     {
@@ -92,7 +75,7 @@ ssize_t HttpConn::write(int* saveErrno)
             writeBuff_.Retrieve(len);
         }
     } while (isET||ToWriteBytes()>10240);
-    return len;
+    return totalLen>0?totalLen:len;
 }
 
 void HttpConn::Close()
@@ -143,100 +126,3 @@ bool HttpConn::process()
     LOG_DEBUG("filesize:%d %d to %d",response_.FileLen(),iovCnt_,ToWriteBytes());
     return 1;
 }
-
-#ifdef OPENSSL_FOUND
-bool HttpConn::InitSSL() 
-{
-    if(!enableHttps_) return false;
-    if(ssl_) 
-    {
-        LOG_WARN("SSL already initialized for this connection");
-        return true;
-    }
-
-    SSLContext& sslCtx=SSLContext::GetInstance();
-    SSL_CTX* ctx=sslCtx.GetContext();
-    if(!ctx)
-    {
-        LOG_ERROR("SSL context not available");
-        return false;
-    }
-
-    ssl_=SSL_new(ctx);
-    if(!ssl)
-    {
-        LOG_ERROR("SSL_new failed");
-        return false;
-    }
-
-    // associate ssl_ with fd_
-    if(SSL_set_fd(ssl_,fd_)!=1) 
-    {
-        LOG_ERROR("SSL_set_fd failed");
-        SSL_free(ssl_);
-        ssl_=nullptr;
-        return false;
-    }
-
-    // server mode to handle shake auto
-    SSL_set_accept_state(ssl_);
-
-    isSSL_=true;
-    sslHandShakeDone_=false;
-
-    LOG_DEBUG("SSL initialized for fd: %d",fd_);
-    return true;
-}
-
-bool HttpConn::SSLHandShake()
-{
-    if(!SSL||!ssl_)
-    {
-        LOG_ERROR("SSL not initialized for handshake");
-        return false;
-    }
-
-    if(sslHandShakeDone_) return true;
-
-    int ret=SSL_do_handshake(ssl_);
-    if(ret==1)
-    {
-        sslHandShakeDone_=true;
-
-        // print handshake info
-        const SSL_CIPHER* cipher=SSL_get_current_cipher(ssl_);
-        if(cipher) LOG_INFO("SSL handshake completed. Cipher: %s",SSL_CIPHER_get_cipher_name(cipher));
-
-        return true;
-    }
-    else
-    {
-        int sslError=SSL_get_error(ssl_,ret);
-        switch(sslError)
-        {
-            case SSL_ERROR_WANT_READ:
-                LOG_DEBUG("SSL handshake needs more read");
-                break;
-            case SSL_ERROR_WANT_WRITE:
-                LOG_DEBUG("SSL handshake needs more write");
-                break;
-            case SSL_ERROR_SYSCALL:
-                LOG_DEBUG("SSL handshake system error: %s",strerror(errno));
-                break;
-            case SSL_ERROR_SSL:
-                {
-                    char errBuf[256];
-                    ERR_error_string_n(ERR_get_ERROR(),errBuf,sizeof(errBuf));
-                    LOG_ERROR("SSL handshake failed with error: %d",errBuf);
-                }
-                break;
-            default:
-                LOG_ERROR("SSL shakehand with error: %d",sslError);
-                break;
-        }
-        return false;
-    }
-}
-
-
-#endif
