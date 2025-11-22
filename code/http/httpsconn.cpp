@@ -1,8 +1,7 @@
 #include "httpsconn.h"
-#include "sslcontext.h"
+#include "sslContext.h"
 
-bool HttpConn::InitSSL() 
-{
+bool HttpsConn::InitSSL() {
     if (ssl_) {
         LOG_CONN(WARN, this, "SSL already initialized");
         return true;
@@ -22,10 +21,10 @@ bool HttpConn::InitSSL()
     }
 
     // associate ssl_ with fd_
-    if (!SSL_set_fd(ssl_, fd_)) {
+    if (!SSL_set_fd(ssl_, GetFd())) {
         LOG_CONN(ERROR, this, "SSL_set_fd failed");
         SSL_free(ssl_);
-        ssl = nullptr;
+        ssl_ = nullptr;
         return false;
     }
 
@@ -38,8 +37,7 @@ bool HttpConn::InitSSL()
     return true;
 }
 
-bool HttpConn::SSLHandShake()
-{
+bool HttpsConn::SSLHandShake() {
     if (!ssl_) {
         LOG_CONN(ERROR, this, "SSL not initialized for handshake");
         return false;
@@ -50,13 +48,14 @@ bool HttpConn::SSLHandShake()
         return true;
     }
 
-    if (SSL_do_handshake(ssl_) == 1) {
+    int ret = SSL_do_handshake(ssl_);
+    if (ret == 1) {
         sslHandShakeDone_ = true;
 
         // print handshake info
         const SSL_CIPHER* cipher = SSL_get_current_cipher(ssl_);
         if (cipher) {
-            LOG_CONN(INFO, this, "SSL handshake completed. Cipher: %s", SSL_CIPHER_get_cipher_name(cipher));
+            LOG_CONN(INFO, this, "SSL handshake completed. Cipher: %s", SSL_CIPHER_get_name(cipher));
         }
         return true;
     } else {
@@ -93,7 +92,8 @@ HttpsConn::~HttpsConn() {
     Close();
 }
 
-void HttpsConn::Init(int sockFd,const sockaddr_in& addr) : HttpConn::Init(sockFd, addr) {
+void HttpsConn::Init(int sockFd,const sockaddr_in& addr) {
+    HttpConn::Init(sockFd, addr);
     InitSSL();
 }
 
@@ -144,6 +144,47 @@ ssize_t HttpsConn::write(int* saveErrno) {
         }
     }
 
+    ssize_t totalLen = 0;
     ssize_t len = -1;
-    // use of iov ? 
+    do {
+        const iovec* curIov = &iov_[0];
+        if (iov_[0].iov_len <= 0 && iovCnt_ > 1) {
+            curIov = &iov_[1];
+        }
+
+        if (curIov->iov_len == 0) {
+            break;
+        }
+
+        len = SSL_write(ssl_, curIov->iov_base, curIov->iov_len);
+        if (len > 0) {
+            totalLen += len;
+
+            if (curIov == &iov_[0]) {
+                writeBuff_.Retrieve(len);
+                iov_[0].iov_base += len;
+                iov_[0].iov_len -= len;
+            } else {
+                iov_[1].iov_base += len;
+                iov_[1].iov_len -= len;
+            }
+        } else {
+            if (saveErrno) {
+                *saveErrno = SSL_get_error(ssl_, len);
+            }
+            break;
+        }
+
+    } while (isET || ToWriteBytes() > 0);
+
+    return totalLen > 0 ? totalLen : len;
+}
+
+void HttpsConn::Close() {
+    if (ssl_) {
+        SSL_shutdown(ssl_);
+        SSL_free(ssl_);
+        ssl_ = nullptr;
+    }
+    HttpConn::Close();
 }

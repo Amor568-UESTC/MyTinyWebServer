@@ -1,5 +1,3 @@
-#include<openssl/err.h>
-
 #include"httpconn.h"
 
 using namespace std;
@@ -56,6 +54,7 @@ ssize_t HttpConn::write(int* saveErrno)
             *saveErrno=errno;
             break;
         }
+        totalLen+=len;
         if(iov_[0].iov_len+iov_[1].iov_len==0)
             break;
         else if(static_cast<size_t>(len)>iov_[0].iov_len)

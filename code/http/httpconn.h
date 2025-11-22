@@ -20,15 +20,15 @@ private:
 
     bool isClose_;
 
-    int iovCnt_;
-    iovec iov_[2];
-
     HttpRequest request_;
     HttpResponse response_;
 
 protected:
     IOBuffer readBuff_;
     IOBuffer writeBuff_;
+
+    int iovCnt_;
+    iovec iov_[2];
     
 public:
     HttpConn();

@@ -21,15 +21,18 @@ private:
     SSLContext() = default;
 
 public:
+    SSLContext(const SSLContext&) = delete;
+    SSLContext& operator=(const SSLContext&) = delete;
+
     static SSLContext& GetInstance();
 
     bool Initialize(const char* certPath,
         const char* keyPath,
-        const char* caPath = nullptr);
+        const char* caPath);
 
     bool Initialize(const std::string& certPath,
         const std::string& keyPath,
-        const std::string& caPath = "");
+        const std::string& caPath);
 
     SSL_CTX* GetContext() const { return ctx_.get(); }
 };
