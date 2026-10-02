@@ -27,8 +27,8 @@ protected:
     IOBuffer readBuff_;
     IOBuffer writeBuff_;
 
-    int iovCnt_;
-    iovec iov_[2];
+    int iovCnt_ = 0;
+    iovec iov_[2]{};
     
 public:
     HttpConn();

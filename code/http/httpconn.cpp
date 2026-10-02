@@ -24,6 +24,10 @@ void HttpConn::Init(int sockFd,const sockaddr_in& addr)
     writeBuff_.RetrieveAll();
     readBuff_.RetrieveAll();
     isClose_=0;
+    //初始化iovec
+    iovCnt_ = 0;
+    iov_[0] = {};
+    iov_[1] = {};
 
     LOG_INFO("Client[%d](%s:%d) in, userCount:%d.",
         fd_,GetIP(),GetPort(),(int)userCnt);
@@ -111,6 +115,7 @@ bool HttpConn::process()
     else response_.Init(srcDir,request_.path(),0,400);
 
     response_.MakeResponse(writeBuff_);
+    iov_[0] = {}, iov_[1] = {}; //清空向量
     iov_[0].iov_base=const_cast<char*>(writeBuff_.Peek());
     iov_[0].iov_len=writeBuff_.ReadableBytes();
     iovCnt_=1;

@@ -46,7 +46,7 @@ bool SSLContext::Initialize(const char* certPath,
     }
 
     // load CA(optional for client cert verify)
-    if (!caPath) {
+    if (caPath && strlen(caPath) > 0) {
         if (SSL_CTX_load_verify_locations(ctx_.get(), caPath, nullptr) <= 0) {
             LOG_ERROR("SSL_CTX_load_verify_locations failed");
             return false;
@@ -61,7 +61,7 @@ bool SSLContext::Initialize(const char* certPath,
 
 bool SSLContext::Initialize(const std::string& certPath,
     const std::string& keyPath,
-    const std::string& caPath = "") {
+    const std::string& caPath) {
     if (caPath.empty()) {
         return Initialize(certPath.c_str(), keyPath.c_str());
     }

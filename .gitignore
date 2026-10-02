@@ -1,0 +1,95 @@
+# 项目构建输出与运行日志
+/bin/
+/log/
+/logs/
+*.log
+
+# 本地 TLS 证书、私钥和签发产物（由每台开发机器自行生成）
+/ssl/
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.csr
+*.srl
+
+# 本地环境配置；保留不含秘密的配置示例
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# C/C++ 编译、链接与调试产物
+*.o
+*.obj
+*.lo
+*.a
+*.lib
+*.la
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.d
+*.gch
+*.pch
+*.pdb
+*.ilk
+*.dSYM/
+
+# 项目中没有扩展名的可执行文件
+/code/http/test/httpsconnTest
+/code/pool/test/testThreadPool
+/webbench-1.5/webbench
+
+# CMake / Ninja / clangd 缓存
+# build/Makefile 是手写构建文件，不能忽略整个 build/ 或所有 Makefile。
+/cmake-build-*/
+/out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+Testing/
+build.ninja
+.ninja_deps
+.ninja_log
+compile_commands.json
+.cache/
+.clangd/
+
+# 测试覆盖率、性能采样与崩溃转储
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+gmon.out
+/coverage/
+core
+core.[0-9]*
+*.stackdump
+
+# 编辑器临时文件（保留已有的 .vscode 共享配置）
+.idea/
+.vscode/ipch/
+*.code-workspace
+*.swp
+*.swo
+*.tmp
+*.bak
+*~
+
+# 操作系统元数据
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# 注意：ignore 规则不会取消跟踪已经提交过的文件。

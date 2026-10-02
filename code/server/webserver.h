@@ -14,6 +14,7 @@
 #include"../pool/sqlconnpool.h"
 #include"../pool/threadpool.h"
 #include"../http/httpconn.h"
+#include"../http/httpsconn.h"
 #include"../http/sslContext.h"
 
 
@@ -36,6 +37,7 @@ private:
     void OnRead_(HttpConn* client);
     void OnWrite_(HttpConn* client);
     void OnProcess(HttpConn* client);
+    void OnHandShake(HttpsConn* client);
 
     static const int MAX_FD=65536;
 
@@ -54,7 +56,7 @@ private:
     std::unique_ptr<HeapTimer> timer_;
     std::unique_ptr<ThreadPool> threadpool_;
     std::unique_ptr<Epoller> epoller_;
-    std::unordered_map<int,HttpConn> user_;
+    std::unordered_map<int,std::unique_ptr<HttpConn>> user_;
 
     bool enableHttps_;
 

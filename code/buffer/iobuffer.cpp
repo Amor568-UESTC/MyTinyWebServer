@@ -1,5 +1,7 @@
 #include "iobuffer.h"
 
+#include <openssl/err.h>
+
 ssize_t IOBuffer::ReadFd(int fd, int* saveErrno) {
     char buff[65535];
     iovec iov[2];
@@ -43,67 +45,75 @@ ssize_t IOBuffer::WriteFd(int fd, int* saveErrno) {
 }
 
 #ifdef OPENSSL_FOUND
-ssize_t IOBuffer::ReadSSL(SSL* ssl, int* saveErrno) {
+//走openSSL的错误而非原来的errno
+ssize_t IOBuffer::ReadSSL(SSL* ssl, int* sslError) {
+    if (sslError) {
+        *sslError = SSL_ERROR_NONE;
+    }
+
     if (!ssl) {
-        if (saveErrno) {
-            *saveErrno = EBADF;
+        if (sslError) {
+            *sslError = SSL_ERROR_SSL;
         }
         return -1;
     }
 
-    char buff[65535];
-    size_t writeble = WritableBytes();
-    ssize_t totalLen = 0;
+    //固定长度读取
+    constexpr int chunckSize = 16 * 1024;
+    EnsureWritable(chunckSize);
 
-    // First read into the buffer's writable space
-    if (writeble > 0) {
-        ssize_t n = SSL_read(ssl, BeginWrite(), static_cast<int>(writeble));
-        if (n > 0) {
-            HasWritten(n);
-            totalLen += n;
-        } else if (n < 0) {
-            if (saveErrno) {
-                *saveErrno = SSL_get_error(ssl, static_cast<int>(n));
-            }
-        }
-    }
+    ERR_clear_error();
+    errno = 0;
 
-    // Then read into the temporary buffer if needed
-    ssize_t n = SSL_read(ssl, buff, sizeof(buff));
+    int n = SSL_read(ssl, BeginWrite(), chunckSize);
     if (n > 0) {
-        Append(buff, n);
-        totalLen += n;
-    } else if (n < 0) {
-        if (saveErrno) {
-            *saveErrno = SSL_get_error(ssl, static_cast<int>(n));
-        }
+        HasWritten(n);
+        return n;
     }
 
-    return totalLen;
+    int error = SSL_get_error(ssl, n);
+    if (sslError)  {
+        *sslError = error;
+    }
+
+    return error == SSL_ERROR_ZERO_RETURN ? 0 : -1;
 }
 
-ssize_t IOBuffer::WriteSSL(SSL* ssl, int* saveErrno) {
+ssize_t IOBuffer::WriteSSL(SSL* ssl, int* sslError) {
+    if (sslError) {
+        *sslError = SSL_ERROR_NONE;
+    }
+
     if (!ssl) {
-        if (saveErrno) {
-            *saveErrno = EBADF;
+        if (sslError) {
+            *sslError = SSL_ERROR_SSL;
         }
         return -1;
     }
 
-    ssize_t readable = ReadableBytes();
+    size_t readable = ReadableBytes();
     if (readable == 0) {
-        return 0;   
+        if (sslError) {
+            *sslError = SSL_ERROR_NONE;
+        }
+        return 0;
     }
 
-    ssize_t n = SSL_write(ssl, Peek(), static_cast<int>(readable));
+    ERR_clear_error();
+    errno = 0;
+
+    int n = SSL_write(ssl, Peek(), readable);
     if (n > 0) {
         Retrieve(n);
-    } else {
-        if (saveErrno) {
-            *saveErrno = SSL_get_error(ssl, static_cast<int>(n));
-        }
+        return n;
     }
-    return n;
+
+    int error = SSL_get_error(ssl, n);
+    if (sslError) {
+        *sslError = error; 
+    }
+
+    return error == SSL_ERROR_ZERO_RETURN ? 0 : -1;
 }
 
 #endif

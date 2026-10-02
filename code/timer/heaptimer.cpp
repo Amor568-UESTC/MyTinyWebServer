@@ -1,5 +1,7 @@
 #include"heaptimer.h"
 
+#include <climits>
+
 using namespace std;
 
 void HeapTimer::del_(size_t i)
@@ -92,8 +94,12 @@ void HeapTimer::doWork(int id)
         return ;
     size_t i=ref_[id];
     TimerNode cur=heap_[i];
-    cur.cb();
+    // 先删除节点, 再执行回调
+    auto cb = heap_[i].cb;
     del_(i);
+    if (cb) {
+        cb();
+    }
 }
 
 void HeapTimer::clear()
@@ -107,11 +113,16 @@ void HeapTimer::tick()
     if(heap_.empty()) return ;
     while(!heap_.empty())
     {
-        TimerNode cur=heap_.front();
-        if(chrono::duration_cast<MS>(cur.expires-Clock::now()).count()) //未超时
+        // 直接比较时间点, 如果当前时间点小于堆顶的过期时间点, 说明没有定时器到期, 直接退出循环
+        if (heap_.front().expires > Clock::now()) {
             break;
-        cur.cb();
+        }
+        
+        auto cb = heap_.front().cb;
         pop();
+        if (cb) {
+            cb();
+        }
     }
 }
 
@@ -124,11 +135,16 @@ void HeapTimer::pop()
 int HeapTimer::GetNextTick()
 {
     tick();
-    size_t res=-1;
-    if(!heap_.empty())
-    {
-        res=chrono::duration_cast<MS>(heap_.front().expires-Clock::now()).count();
-        if(res<0) res=0;
+    if (heap_.empty()) {
+        return -1;
     }
-    return res;
+
+    auto remaining = heap_.front().expires - Clock::now();
+    if (remaining <= Clock::duration::zero()) {
+        return 0;
+    }
+
+    auto ms = std::chrono::duration_cast<MS>(remaining).count();
+    // 不足1ms的期限, 可以等待1ms
+    return static_cast<int>(std::min<long long>(INT_MAX, std::max<long long>(1, ms)));
 }

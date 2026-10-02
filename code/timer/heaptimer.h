@@ -12,7 +12,7 @@
 #include"../log/log.h"
 
 typedef std::function<void()> TimeoutCallBack;
-typedef std::chrono::high_resolution_clock Clock;
+typedef std::chrono::steady_clock Clock; //使用steady_clock即可, 并且单调递增不受系统影响
 typedef std::chrono::milliseconds MS;
 typedef Clock::time_point TimeStamp;
 
