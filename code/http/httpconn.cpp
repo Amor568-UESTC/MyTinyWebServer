@@ -28,6 +28,7 @@ void HttpConn::Init(int sockFd,const sockaddr_in& addr)
     iovCnt_ = 0;
     iov_[0] = {};
     iov_[1] = {};
+    request_.Init();
 
     LOG_INFO("Client[%d](%s:%d) in, userCount:%d.",
         fd_,GetIP(),GetPort(),(int)userCnt);
@@ -104,16 +105,23 @@ sockaddr_in HttpConn::GetAddr() const { return addr_;}
 
 bool HttpConn::process()
 {
-    request_.Init();
-    if(readBuff_.ReadableBytes()<=0)
-        return 0;
-    else if(request_.parse(readBuff_))
-    {
-        LOG_DEBUG("%s",request_.path().c_str());
-        response_.Init(srcDir,request_.path(),request_.IsKeepAlive(),200);
+    if (requestDone_) {
+        request_.Init();
+        requestDone_ = false;
     }
-    else response_.Init(srcDir,request_.path(),0,400);
 
+    const auto res = request_.parse(readBuff_);
+    if (res == HttpRequest::ParseRes::NeedMore) {
+        return false; //OnProcess()会重新监听EPOLLIN
+    }
+
+    requestDone_ = true;
+    const bool complete = res == HttpRequest::ParseRes::Complete;
+    const bool canContinue = !IsReadClose() || readBuff_.ReadableBytes() > 0;
+    keepAlive_ = complete && request_.IsKeepAlive() && canContinue;
+    
+    string responsePath = complete ? request_.path() : "/400.html";
+    response_.Init(srcDir, responsePath, keepAlive_, complete ? 200 : 400);
     response_.MakeResponse(writeBuff_);
     iov_[0] = {}, iov_[1] = {}; //清空向量
     iov_[0].iov_base=const_cast<char*>(writeBuff_.Peek());
@@ -127,6 +135,6 @@ bool HttpConn::process()
         iovCnt_=2;
     }
 
-    LOG_DEBUG("filesize:%d %d to %d",response_.FileLen(),iovCnt_,ToWriteBytes());
+    LOG_DEBUG("filesize:%zu %d to %zu",response_.FileLen(),iovCnt_,ToWriteBytes());
     return 1;
 }

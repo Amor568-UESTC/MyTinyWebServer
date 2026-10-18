@@ -23,6 +23,10 @@ private:
     HttpRequest request_;
     HttpResponse response_;
 
+    //增加一个标志位，表示请求是否已经完成解析
+    bool requestDone_ = false;
+    bool keepAlive_ = false;
+
 protected:
     IOBuffer readBuff_;
     IOBuffer writeBuff_;
@@ -38,6 +42,7 @@ public:
     virtual ssize_t read(int* saveErrno);
     virtual ssize_t write(int* saveErrno);
     virtual void Close();
+    virtual bool IsReadClose() const { return false; }
 
     int GetFd() const;
     int GetPort() const;
@@ -46,8 +51,8 @@ public:
 
     bool process();
 
-    int ToWriteBytes() {return iov_[0].iov_len+iov_[1].iov_len;}
-    bool IsKeepAlive() const {return request_.IsKeepAlive();}
+    size_t ToWriteBytes() {return iov_[0].iov_len+iov_[1].iov_len;}
+    bool IsKeepAlive() const { return keepAlive_; } //使用自己的变量来判断
 
     static bool isET;
     static const char* srcDir;

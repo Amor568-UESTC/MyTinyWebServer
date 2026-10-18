@@ -1,7 +1,48 @@
 #include"httprequest.h"
 
+#include <charconv>
+
 using namespace std;
 
+namespace {
+string ToLowerAscii(string txt) {
+    for (char& c : txt) {
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+    }
+    return txt;
+}
+
+//去掉字符串两端的空格和制表符
+string TrimOWS(const string& txt) {
+    const auto fst = txt.find_first_not_of(" \t");
+    if (fst == string::npos) {
+        return {};
+    }
+    const auto lst = txt.find_last_not_of(" \t");
+    return txt.substr(fst, lst - fst + 1);
+}
+
+//检查Connection中是否包含某个完整选项
+//如Connection: Upgrade, Keep-Alive
+bool HasConnectionToken(const string& val, const string& wanted) {
+    size_t begin = 0;
+    while (begin < val.size()) {
+        const auto comma = val.find(',', begin);
+        const auto token = ToLowerAscii(TrimOWS(val.substr(
+            begin, comma == string::npos ? string::npos : comma - begin)));
+        if (token == wanted) {
+            return true;
+        }
+        if (comma == string::npos) {
+            break;
+        }
+        begin = comma + 1;
+    }
+    return false;
+}
+}
 
 const std::unordered_set<std::string> HttpRequest::DEFAULT_HTML=
 {
@@ -30,22 +71,62 @@ bool HttpRequest::ParseRequestLine_(const std::string& line)
     return 0;
 }
 
-void HttpRequest::ParseHeader_(const std::string& line)
+bool HttpRequest::ParseHeader_(const std::string& line)
 {
-    regex pattern("^([^:]*): ?(.*)$");
+    static const regex pattern(R"(^([!#$%&'*+\-.^_\x60|~0-9A-Za-z]+):[ \t]*(.*)$)");
     smatch subMatch;
-    if(regex_match(line,subMatch,pattern))
-        header_[subMatch[1]]=subMatch[2];
-    else 
-        state_=BODY;
+    if (!regex_match(line, subMatch, pattern)) {
+        return false;
+    }
+
+    string key = ToLowerAscii(subMatch[1].str());
+    string val = TrimOWS(subMatch[2].str());
+    for (unsigned char c : val) {
+        //c小于普通空格0x20只能为\t,拒绝DEL控制符0x7f
+        if ((c < 0x20 && c != '\t') || c == 0x7f) {
+            return false;
+        }
+    }
+
+    //重复Content-Length一律拒绝
+    if (key == "content-length" && header_.contains(key)) {
+        return false;
+    }
+    if (key == "connection" && header_.contains(key)) {
+        header_[key] += "," + val;
+    } else {
+        header_[key] = val;
+    }
+    return true;
 }
+
+bool HttpRequest::FinishHeadrs_() {
+    //当前暂不支持Transfer-Encoding,明确拒绝
+    if (header_.count("transfer-encoding")) {
+        return false;
+    }
+
+    contentLength_ = 0;
+    auto it = header_.find("content-length");
+    if (it == header_.end()) {
+        return true;
+    }
+
+    const string& text = it->second;
+    const char* begin = text.data();
+    const char* end = begin + text.size();
+    //使用from_chars解析content-length
+    auto result = from_chars(begin, end, contentLength_);
+    return result.ec == errc{} && result.ptr == end;
+}
+
 
 void HttpRequest::ParseBody_(const std::string& line)
 {
     body_=line;
     ParsePost_();
     state_=FINISH;
-    LOG_DEBUG("Body:%s, len:%d",line.c_str(),line.size());
+    LOG_DEBUG("Body:%s, len:%zu",line.c_str(),line.size());
 }
 
 void HttpRequest::ParsePath_()
@@ -62,20 +143,21 @@ void HttpRequest::ParsePath_()
 
 void HttpRequest::ParsePost_()
 {
-    if(method_=="POST"&&header_["Content-Type"]=="application/x-www-form-urlencoded")
-    {
+    const auto type = header_.find("content-type");
+    if (method_ == "POST" && type != header_.end() &&
+        ToLowerAscii(TrimOWS(type->second.substr(0, type->second.find(';')))) ==
+        "application/x-www-form-urlencoded") {
         ParseFromUrlencoded_();
-        if(DEFAULT_HTML_TAG.count(path_))
-        {
-            int tag=DEFAULT_HTML_TAG.find(path_)->second;
-            LOG_DEBUG("Tag:%d",tag);
-            if(tag==0||tag==1)
-            {
-                bool isLogin=(tag==1);
-                if(UserVerify(post_["username"],post_["password"],isLogin))
-                    path_="/welcome.html";
-                else
-                    path_="/error.html";
+        if (DEFAULT_HTML_TAG.contains(path_)) {
+            int tag = DEFAULT_HTML_TAG.find(path_)->second;
+            LOG_DEBUG("Tag: %d", tag);
+            if (tag == 0 || tag == 1) {
+                bool isLogin = (tag == 1);
+                if (UserVerify(post_["username"], post_["password"], isLogin)) {
+                    path_ = "/welcome.html";
+                } else {
+                    path_ = "/error.html";
+                }
             }
         }
     }
@@ -200,39 +282,54 @@ void HttpRequest::Init()
     state_=REQUEST_LINE;
     header_.clear();
     post_.clear();
+    contentLength_ = 0;
 }
 
-bool HttpRequest::parse(Buffer& buff)
+HttpRequest::ParseRes HttpRequest::parse(Buffer& buff)
 {
-    const char CRLF[]="\r\n";
-    if(buff.ReadableBytes()<=0) return 0;
-    while(buff.ReadableBytes()&&state_!=FINISH)
-    {
-        const char* lineEnd=search(buff.Peek(),buff.BeginWriteConst(),CRLF,CRLF+2);
-        string line(buff.Peek(),lineEnd);
-        switch(state_)
-        {
-            case REQUEST_LINE:
-                if(!ParseRequestLine_(line))
-                    return false;
-                ParsePath_();
-                break;    
-            case HEADERS:
-                ParseHeader_(line);
-                if(buff.ReadableBytes()<=2)
-                    state_=FINISH;
-                break;
-            case BODY:
-                ParseBody_(line);
-                break;
-            default:
-                break;
+    const char* CRLF = "\r\n";
+    using res = HttpRequest::ParseRes;
+    
+    while (state_ != FINISH) {
+        //先解析BODY
+        if (state_ == BODY) {
+            if (buff.ReadableBytes() < contentLength_) {
+                return res::NeedMore;
+            }
+
+            string body(buff.Peek(), contentLength_);
+            buff.Retrieve(contentLength_);
+            ParseBody_(body);
+            return res::Complete;
         }
-        if(lineEnd==buff.BeginWrite()) break;
-        buff.RetrieveUntil(lineEnd+2);
+        //请求行和请求头按行解析
+        const char* end = buff.BeginWriteConst();
+        const char* lineEnd = search(buff.Peek(), end, CRLF, CRLF + 2);
+        if (lineEnd == end) { //不以CRLF结尾
+            return res::NeedMore;
+        }
+        string line(buff.Peek(), lineEnd);
+        buff.RetrieveUntil(lineEnd + 2);
+
+        if (state_ == REQUEST_LINE) {
+            if (!ParseRequestLine_(line)) {
+                return res::BadRequest;
+            }
+            ParsePath_();
+        } else if (state_ == HEADERS) {
+            if (line.empty()) {
+                if (!FinishHeadrs_()) {
+                    return res::BadRequest;
+                }
+                state_ = BODY;
+            } else if (!ParseHeader_(line)) {
+                return res::BadRequest;
+            }
+        }
     }
+    
     LOG_DEBUG("[%s], [%s], [%s]",method_.c_str(),path_.c_str(),version_.c_str());
-    return 1;
+    return res::Complete;
 }
 
 std::string HttpRequest::path() const { return path_;}
@@ -261,7 +358,8 @@ std::string HttpRequest::GetPost(const char* key) const
 
 bool HttpRequest::IsKeepAlive() const
 {
-    if(header_.count("Connection"))
-        return header_.find("Connection")->second=="keep-alive"&&version_=="1.1";
-    return 0;
+    const auto it = header_.find("connection");
+    return version_ == "1.1" && it != header_.end() &&
+        HasConnectionToken(it->second, "keep-alive") &&
+        !HasConnectionToken(it->second, "close");
 }

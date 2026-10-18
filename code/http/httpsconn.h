@@ -6,6 +6,8 @@ class HttpsConn : public HttpConn {
 private:
     SSL* ssl_ = nullptr;
     bool sslHandShakeDone_ = false;
+    //IOState会在下一次读写时重置,需要单独记录
+    bool readClosed_ = false;
 
 public:
     HttpsConn();
@@ -25,6 +27,7 @@ public:
     ssize_t read(int* sslError) override;
     ssize_t write(int* sslError) override;
     void Close() override;
+    bool IsReadClose() const override { return readClosed_; }
 
     bool isHandShakeDone() const { return sslHandShakeDone_; }
 

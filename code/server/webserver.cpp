@@ -201,7 +201,7 @@ void WebServer::OnRead_(HttpConn* client)
         OnHandShake(https);
         return ;
     }
-    int ret=-1;
+    ssize_t ret=-1;
     int readErrno=0;
     ret=client->read(&readErrno);
 
@@ -211,8 +211,13 @@ void WebServer::OnRead_(HttpConn* client)
         using Op = HttpsConn::PendingOp;
 
         State state = https->GetIOState();
-        if (state == State::Failed || state == State::Closed) {
+        if (state == State::Failed) {
             CloseConn_(client);
+            return;
+        }
+        //状态为关闭可能是读端关闭了
+        if (state == State::Closed) {
+            OnProcess(client);
             return;
         }
 
@@ -251,7 +256,7 @@ void WebServer::OnWrite_(HttpConn* client)
         OnHandShake(https);
         return ;
     }
-    int ret=-1;
+    ssize_t ret=-1;
     int writeErrno=0;
     ret=client->write(&writeErrno);
 
@@ -282,19 +287,23 @@ void WebServer::OnWrite_(HttpConn* client)
             }
             return;
         }
+    }
 
-        if (client->ToWriteBytes() > 0) {
-            if (ret >= 0 || writeErrno == EAGAIN || writeErrno == EWOULDBLOCK) {
-                if (!epoller_->ModFd(client->GetFd(), connEvent_ | EPOLLOUT)) {
-                    CloseConn_(client);
-                }
-                return;
-            } else {
+    //在https外检查判断
+    if (client->ToWriteBytes() > 0) {
+        const bool retryable = writeErrno == EAGAIN ||
+            writeErrno == EWOULDBLOCK || writeErrno == EINTR;
+        if ((ret > 0 && writeErrno == 0) || retryable) {
+            if (!epoller_->ModFd(client->GetFd(), connEvent_ | EPOLLOUT)) {
                 CloseConn_(client);
             }
             return;
+        } else {
+            CloseConn_(client);
         }
+        return;
     }
+
     if(client->ToWriteBytes()==0)
     {
         if(client->IsKeepAlive())
@@ -316,10 +325,16 @@ void WebServer::OnWrite_(HttpConn* client)
 
 void WebServer::OnProcess(HttpConn* client)
 {
-    if(client->process())
-        epoller_->ModFd(client->GetFd(),connEvent_|EPOLLOUT);
-    else
-        epoller_->ModFd(client->GetFd(),connEvent_|EPOLLIN);
+    if (client->process()) {
+        if (!epoller_->ModFd(client->GetFd(), connEvent_ | EPOLLOUT)) {
+            CloseConn_(client);
+        }
+    } else if (client->IsReadClose()) {
+        //请求不完整且不会在受到更多数据
+        CloseConn_(client);
+    } else if (!epoller_->ModFd(client->GetFd(), connEvent_ | EPOLLIN)) {
+        CloseConn_(client);
+    }
 }
 
 void WebServer::OnHandShake(HttpsConn* client)
@@ -423,12 +438,12 @@ void WebServer::Start()
             int fd=epoller_->GetEventFd(i);
             uint32_t events=epoller_->GetEvents(i);
             if(fd==listenFd_) DealListen_();
-            else if(events&(EPOLLRDHUP|EPOLLHUP|EPOLLERR))
+            else if(events&(EPOLLHUP|EPOLLERR))
             {
                 assert(user_.count(fd));
                 CloseConn_(user_[fd].get());
             }
-            else if (events & (EPOLLIN | EPOLLOUT)) {
+            else if (events & (EPOLLIN | EPOLLOUT | EPOLLRDHUP)) {
                 assert(user_.count(fd));
 
                 HttpConn* client = user_[fd].get();
@@ -437,7 +452,9 @@ void WebServer::Start()
                     DealRead_(client);
                 } else if (https && https->GetPendingOp() == HttpsConn::PendingOp::Write) {
                     DealWrite_(client);
-                } else if (events & EPOLLIN) {
+                } else if ((events & EPOLLOUT) && client->ToWriteBytes() > 0) {
+                    DealWrite_(client); //优先发送已有的响应
+                } else if (events & (EPOLLIN | EPOLLRDHUP)) {
                     DealRead_(client);
                 } else if (events & EPOLLOUT) {
                     DealWrite_(client);

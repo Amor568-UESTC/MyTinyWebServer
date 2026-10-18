@@ -1,6 +1,7 @@
 #include "iobuffer.h"
 
 #include <openssl/err.h>
+#include <algorithm>
 
 ssize_t IOBuffer::ReadFd(int fd, int* saveErrno) {
     char buff[65535];
@@ -102,7 +103,9 @@ ssize_t IOBuffer::WriteSSL(SSL* ssl, int* sslError) {
     ERR_clear_error();
     errno = 0;
 
-    int n = SSL_write(ssl, Peek(), readable);
+    constexpr size_t chunckSize = 16 * 1024;
+    const int writeSize = static_cast<int>(std::min(readable, chunckSize));
+    int n = SSL_write(ssl, Peek(), writeSize);
     if (n > 0) {
         Retrieve(n);
         return n;
