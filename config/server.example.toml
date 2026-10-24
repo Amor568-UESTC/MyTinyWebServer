@@ -1,0 +1,30 @@
+# 复制为同目录的 server.toml 后填写本机参数。
+# 文件内的相对路径以本配置文件所在目录为基准。
+[server]
+port = 8888
+listenMode = "et"
+connectionMode = "et"
+idleTimeoutMs = 60000
+linger = false
+workerThreads = 6
+documentRoot = "../rss"
+
+[database]
+host = "localhost"
+port = 3306
+user = "your_user"
+password = "replace_with_local_password"
+name = "yourdb"
+poolSize = 12
+
+[tls]
+enabled = false
+certificate = "../ssl/lan-server.crt"
+privateKey = "../ssl/lan-server.key"
+# 非空时，沿用当前服务器逻辑，要求客户端提供受信任 CA 签发的证书。
+clientCaFile = ""
+
+[logging]
+enabled = true
+level = 1
+asyncQueueSize = 1024

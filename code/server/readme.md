@@ -1,4 +1,10 @@
-### 将epoll封住为Epoller类
+# 服务器模块
+
+更新日期：2026-10-24。`main()` 通过 `LoadConfig()` 读取并校验 TOML，再把拥有字符串存储的 `ServerConfig` 移入 `WebServer`。具体字段、启动命令与测试入口见 [配置化指南](../../docs/config-and-hot-reload-guide.md)。
+
+端口、ET/LT 模式、超时、资源路径、线程数、数据库和 TLS 参数已接入。数据库初始化失败上报、日志初始化顺序、日志阈值和队列容量的实际使用仍需按指南阶段四完善；连接与工作线程的关闭协调继续暂缓。
+
+### 将epoll封装为Epoller类
 
 ## 类内部私有成员和函数
 
@@ -50,16 +56,16 @@
 
     # initSocket_()
     套接字初始化函数。初始化Ip地址端口等，初始化optLinger，
-    若ipenLinger_为1,表示linger开启，控制socket关闭时间
+    若config_.server.linger为true,表示linger开启，控制socket关闭时间
     为1s，否则默认会直到缓存中数据发送完毕才关闭socket。
     初始化listenFd_，设置listenFd_的LINGER，设置为多路复用
     模式，绑定ListenFd_的地址。将listenFd_加入epoll红黑树
     中，设置为非阻塞模式
 
-    # InitEventMode_(int trigMode)
-    根据函数参数触发模式，设置listenEvent_和connEvent_
+    # InitEventMode_(TriggerMode listenMode, TriggerMode connectionMode)
+    根据监听和连接各自的触发模式，设置listenEvent_和connEvent_
     是否为水平或者边缘触发。先将listenEvent_设置为
-    EPOLLRDHUB若对端关闭则会触发，connEvent_多设置一个
+    EPOLLRDHUP若对端关闭写方向则会触发，connEvent_多设置一个
     EPOLLONESHOT事件被处理后，epoll不会自动重新注册该事件。
     这意味着，当事件被触发并被处理后，如果需要再次监听该事件，
     必须手动重新注册。在多线程环境中，它可以确保一个事件只
@@ -67,7 +73,7 @@
     根据connEvent_为EPOLLET设置
 
     # AddClient_(int fd,sockaddr_in addr)
-    添加客户端。先使用函数参数初始化user_[fd]，如果timeoutMS_
+    添加客户端。先使用函数参数初始化user_[fd]，如果config_.server.idleTimeoutMs
     设置>0，则向timer_中添加绑定关闭客户端函数。设置fd非阻塞
 
     # DealListen_()
@@ -110,23 +116,15 @@
     # SetFdNonblock(int fd)
     设置fd为非阻塞
 
-    # port_             int
-    端口号
-
-    # openLinger_       bool
-    优雅关闭标志
-
-    # timeoutMS_        int 
-    超时时间
+    # config_           const ServerConfig
+    服务器持有的启动配置。端口、linger、空闲超时、HTTPS开关等
+    直接读取config_，不再重复保存成独立配置成员。
 
     # isClose_          bool
     是否关闭标志
 
     # listenFd_         int
     监听描述符
-
-    # srcDir            char*
-    源文件夹名字
 
     # listenEvent_      uint32_t
     描述listenFd_性质
@@ -148,19 +146,19 @@
 
 ## 类内部公有函数
 
-    # WebServer(int port, ... ,)
-    按照参数初始化port_,openLinger_,timeoutMS_,isClose_置0
-    timer_,threadpool_,epoller_构造。获取文件夹，并初始化
-    srcDir_为源文件夹引给HttpConn::srcDir,初始化连接池实例，
+    # WebServer(ServerConfig config)
+    按值接收配置并移入config_，初始化运行状态、定时器、线程池
+    和epoll。HttpConn::srcDir借用config_.server.documentRoot的
+    字符串存储，配置在服务器运行期间保持不变。初始化连接池实例，
     初始化事件模式，套接字等。若开启Log，初始化Log实例，向Log中
     写入基本信息
 
     # ~WebServer()
-    关闭listenFd_,isClose_标志置1,释放srcDir_，关闭sql连接池
+    关闭listenFd_,isClose_标志置1，关闭sql连接池
     实例。
 
     # void Start()
-    开始服务器运行。见设置timeMS为-1，进入循环。判断是否有timeoutMS_
+    开始服务器运行。设置timeMS为-1，进入循环。若config_.server.idleTimeoutMs
     >0，设置timeMS为定时器下个事件过期时间，调用epoller检测IO。
     检测完成后根据就绪IO的事件类型进行操作：监听，读，或者写事件。
 

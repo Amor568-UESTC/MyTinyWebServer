@@ -1,12 +1,30 @@
-#include<unistd.h>
+#include <unistd.h>
 #include <signal.h>
 #include <cstdio>
+#include <exception>
+#include <filesystem>
+#include <iostream>
+#include <string_view>
+#include <utility>
 
-#include"server/webserver.h"
+#include "server/webserver.h"
+#include "config/configloader.h"
 
-int main()
+int main(int argc, char* argv[])
 {
-    //忽略SIG_PIPE信号,避免写入失败导致服务器终止
+    std::filesystem::path configPath = "config/server.toml";
+    if (argc == 2 && std::string_view(argv[1]) == "--help") {
+        std::cout << "Usage: " << argv[0] << " [--config FILE]\n";
+        return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) == "--config") {
+        configPath = argv[2];
+    } else if (argc != 1) {
+        std::cerr << "Usage: " << argv[0] << " [--config FILE]\n";
+        return 1;
+    }
+
+    // 忽略 SIGPIPE 信号，避免写入失败导致服务器终止。
     struct sigaction action{};
     action.sa_handler = SIG_IGN;
     sigemptyset(&action.sa_mask);
@@ -15,12 +33,13 @@ int main()
         return 1;
     }
 
-    // TODO: 如需启用 HTTPS，请先生成证书文件，然后设置 enableHttps=true 并填入证书路径
-    WebServer server(
-        8888,3,60000,false,
-        3306,"root","123","yourdb",
-        12,6,true,1,1024,
-        true,"./ssl/lan-server.crt","./ssl/lan-server.key",nullptr
-    );
-    server.Start();
+    try {
+        auto config = LoadConfig(configPath);
+        WebServer server(std::move(config));
+        server.Start();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+    return 0;
 }
