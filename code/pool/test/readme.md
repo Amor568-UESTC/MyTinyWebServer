@@ -1,34 +1,44 @@
-# ThreadPoolV2 测试套件
+# 池模块测试
 
-## 概述
+测试源码、构建规则和说明放在本目录.默认在当前目录生成测试程序,与旧测试的使用方式一致.
 
-这是一个针对自定义线程池 `ThreadPoolV2` 的完整测试套件，验证线程池的基本功能、优先级调度、异常处理等核心特性。
+## SQL 连接池回归
 
-## 功能特性
+以下命令在本目录执行:
 
-- ✅ 基础任务执行测试
-- ✅ 优先级调度验证（LOW/NORMAL/HIGH/URGENT）
-- ✅ 返回值类型测试（int/string/void）
-- ✅ 异常处理机制测试
-- ✅ 线程安全性验证
-- ✅ 性能基准测试
-
-## 快速开始
-
-### 前提条件
-
-- C++17 兼容编译器（g++ 7+ 或 MSVC 2019+）
-- 支持 pthread（Linux/Mac）或 Windows线程API
-
-### 编译运行
-
-#### 方法1：直接编译（推荐）
 ```bash
-# Debug版本（包含调试信息）
+make
+make test
+```
+
+`make` 只编译 `sqlconnpoolTest`,`make test` 编译并运行全部 15 个场景.也可以从项目根目录执行 `make sql-test`,该命令会转发到这里.
+
+查看场景或单独运行:
+
+```bash
+./sqlconnpoolTest --list
+./sqlconnpoolTest concurrent
+```
+
+测试通过链接器包装模拟 MySQL API,无需真实 MySQL 服务、数据库账号或证书.每个场景在独立进程中运行,失败返回非零退出码,Makefile 为每个场景设置 10 秒超时.
+
+覆盖初始化失败与资源回滚、借还和池耗尽、RAII 存活期与提前返回、关闭后归还、重复初始化、并发独占、线程状态,以及无连接时的登录失败路径.这些检查不替代真实账号认证、SQL 查询、完整登录注册或正常停机的验收.
+
+默认产物 `code/pool/test/sqlconnpoolTest` 已加入 `.gitignore`,可通过 `BIN_DIR` 指定其他输出目录.清理它:
+
+```bash
+make clean
+```
+
+## ThreadPoolV2 原有测试
+
+[threadPoolV2Test.cpp](threadPoolV2Test.cpp) 保留原来的单独编译方式,不由本目录 Makefile 默认构建.该测试包含基础任务、优先级、返回值、异常、并发和性能场景.
+
+在本目录编译运行:
+
+```bash
 g++ -std=c++17 -pthread -g -O0 -Wall -Wextra threadPoolV2Test.cpp -o testThreadPool
-
-# Release版本（优化性能）
-g++ -std=c++17 -pthread -O2 -DNDEBUG threadPoolV2Test.cpp -o testThreadPool
-
-# 运行测试
 ./testThreadPool
+```
+
+原有 `testThreadPool` 二进制保留,本目录的 `make clean` 只清理新 Makefile 生成的 SQL 连接池测试程序.

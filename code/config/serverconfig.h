@@ -29,8 +29,9 @@ struct TlsConfig {
     bool enabled = false;
     std::string certificate;
     std::string privateKey;
-    // 非空时启用客户端证书验证
+    //客户端证书的信任源,是否要求证书由独立开关控制
     std::string clientCaFile;
+    bool requireClientCertificate = false;
 };
 
 struct LoggingConfig {

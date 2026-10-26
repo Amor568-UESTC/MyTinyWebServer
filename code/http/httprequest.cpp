@@ -210,9 +210,13 @@ bool HttpRequest::UserVerify(const std::string& name,const std::string& pwd,bool
 {
     if(name==""||pwd=="") return 0;
     LOG_INFO("Verify name:%s pwd:%s",name.c_str(),pwd.c_str());
-    MYSQL* sql;
-    SqlConnRAII(&sql,SqlConnPool::Instance());
-    assert(sql);
+    //获取不到连接就直接返回失败
+    MYSQL* sql = nullptr;
+    SqlConnRAII sqlGuard(&sql, SqlConnPool::Instance());
+    if (sql == nullptr) {
+        LOG_ERROR("No database connection available");
+        return false;
+    }
 
     bool flag=0;
     char order[256]={0};
@@ -264,7 +268,6 @@ bool HttpRequest::UserVerify(const std::string& name,const std::string& pwd,bool
         }
         flag=1;
     }
-    SqlConnPool::Instance()->FreeConn(sql);
     LOG_DEBUG("UserVerify success!!");
     return flag;
 }

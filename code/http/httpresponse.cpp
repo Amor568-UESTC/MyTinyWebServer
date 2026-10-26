@@ -64,7 +64,6 @@ void HttpResponse::AddHeader_(Buffer& buff)
     if(isKeepAlive_)
     {
         buff.Append("keep-alive\r\n");
-        buff.Append("keep-alive: max=6, timeout=120\r\n");
     }
     else buff.Append("close\r\n");
     //暂时没有500的html页面

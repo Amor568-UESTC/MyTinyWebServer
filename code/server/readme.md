@@ -2,7 +2,9 @@
 
 更新日期：2026-10-24。`main()` 通过 `LoadConfig()` 读取并校验 TOML，再把拥有字符串存储的 `ServerConfig` 移入 `WebServer`。具体字段、启动命令与测试入口见 [配置化指南](../../docs/config-and-hot-reload-guide.md)。
 
-端口、ET/LT 模式、超时、资源路径、线程数、数据库和 TLS 参数已接入。数据库初始化失败上报、日志初始化顺序、日志阈值和队列容量的实际使用仍需按指南阶段四完善；连接与工作线程的关闭协调继续暂缓。
+端口、ET/LT 模式、超时、资源路径、线程数、数据库和 TLS 参数已接入.主线程先初始化 MySQL 库,再初始化日志、连接数据库、准备 TLS 和监听,最后创建工作线程.启动失败通过 main 输出 stderr 并返回 1,构造失败时回收监听 fd 和已建立的空闲数据库连接.日志阈值、队列容量和独立客户端证书开关已生效.连接与工作线程的关闭协调继续暂缓.
+
+初始化失败回归位于 [test/](test/readme.md),本目录测试使用真实 main 和注入的 MySQL/网络失败,项目根目录执行 `make server-test`.
 
 ### 将epoll封装为Epoller类
 
@@ -18,8 +20,8 @@
 
     # Epoller(int maxEvent)
     explicit禁止隐式构造...
-    初始化events_数组，调用epoll_create()初始化
-    红黑树，消息队列资源等，返回给epollFd_描述符
+    校验容量并初始化events_数组,通过epoll_create1(EPOLL_CLOEXEC)
+    创建epoll描述符.创建失败时抛异常,由main统一输出原因
 
     # ~Epoller()
     调用close(epollFd_)，关闭并释放资源
@@ -58,9 +60,9 @@
     套接字初始化函数。初始化Ip地址端口等，初始化optLinger，
     若config_.server.linger为true,表示linger开启，控制socket关闭时间
     为1s，否则默认会直到缓存中数据发送完毕才关闭socket。
-    初始化listenFd_，设置listenFd_的LINGER，设置为多路复用
-    模式，绑定ListenFd_的地址。将listenFd_加入epoll红黑树
-    中，设置为非阻塞模式
+    初始化listenFd_,设置LINGER和地址复用,检查非阻塞设置,
+    绑定并监听地址,最后加入epoll.任一步失败均抛出保留errno的异常,
+    由构造函数回收listenFd_,避免重复关闭
 
     # InitEventMode_(TriggerMode listenMode, TriggerMode connectionMode)
     根据监听和连接各自的触发模式，设置listenEvent_和connEvent_
@@ -147,11 +149,11 @@
 ## 类内部公有函数
 
     # WebServer(ServerConfig config)
-    按值接收配置并移入config_，初始化运行状态、定时器、线程池
-    和epoll。HttpConn::srcDir借用config_.server.documentRoot的
-    字符串存储，配置在服务器运行期间保持不变。初始化连接池实例，
-    初始化事件模式，套接字等。若开启Log，初始化Log实例，向Log中
-    写入基本信息
+    按值接收配置并移入config_,先初始化MySQL客户端库和日志,
+    再建立数据库连接、TLS上下文、epoll和监听,最后创建工作线程.
+    HttpConn::srcDir借用config_.server.documentRoot的字符串存储,
+    配置在服务器运行期间保持不变.构造失败时显式回收原始fd和空闲SQL连接,
+    异常传播到main,日志关闭时仍输出终端错误并返回非零退出码
 
     # ~WebServer()
     关闭listenFd_,isClose_标志置1，关闭sql连接池

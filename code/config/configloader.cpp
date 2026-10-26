@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <initializer_list>
 #include <limits>
 #include <sstream>
@@ -75,6 +76,33 @@ void CheckText(const string& text, string_view field) {
     if (text.find('\0') != string::npos) {
         Fail(field, "NUL characters are not allowed");
     }
+}
+
+string ReadDatabasePassword(const toml::table& table, const string& fallback) {
+    const bool hasPassword = table.get("password") != nullptr;
+    const bool hasPasswordEnv = table.get("passwordEnv") != nullptr;
+    if (hasPassword && hasPasswordEnv) {
+        Fail("database.passwordEnv", "cannot be used together with database.password");
+    }
+    if (!hasPasswordEnv) {
+        return ReadOptional(table, "password", fallback, "database.password");
+    }
+
+    const auto variable = ReadOptional(table, "passwordEnv", string{}, "database.passwordEnv");
+    CheckText(variable, "database.passwordEnv");
+    if (variable.empty() || variable.find('=') != string::npos) {
+        Fail("database.passwordEnv", "must name a nonempty environment variable without '='");
+    }
+
+    const char* value = std::getenv(variable.c_str());
+    if (value == nullptr) {
+        Fail("database.passwordEnv", "referenced environment variable is not set");
+    }
+    if (value[0] == '\0') {
+        Fail("database.passwordEnv", "referenced environment variable must not be empty");
+    }
+    // 复制到配置对象，不保留 getenv() 返回的指针，也不输出密码值。
+    return string(value);
 }
 
 TriggerMode ReadMode(const toml::table& table, string_view key, TriggerMode fallback, string_view field) {
@@ -161,6 +189,9 @@ void Validate(const ServerConfig& config) {
 
     const auto& tls = config.tls;
     if (tls.enabled) {
+        if (tls.requireClientCertificate && tls.clientCaFile.empty()) {
+            Fail("tls.clientCaFile", "must be set when tls.requireClientCertificate is true");
+        }
         RequireRegularFile(tls.certificate, "tls.certificate");
         RequireRegularFile(tls.privateKey, "tls.privateKey");
         if (!tls.clientCaFile.empty()) {
@@ -187,8 +218,9 @@ ServerConfig LoadConfig(const filesystem::path& path) {
         const auto& logging = Section(root, "logging");
         CheckKeys(server, "server", {"port", "listenMode", "connectionMode", "idleTimeoutMs",
                                     "linger", "workerThreads", "documentRoot"});
-        CheckKeys(db, "database", {"host", "port", "user", "password", "name", "poolSize"});
-        CheckKeys(tls, "tls", {"enabled", "certificate", "privateKey", "clientCaFile"});
+        CheckKeys(db, "database", {"host", "port", "user", "password", "passwordEnv", "name", "poolSize"});
+        CheckKeys(tls, "tls", {"enabled", "certificate", "privateKey", "clientCaFile",
+                               "requireClientCertificate"});
         CheckKeys(logging, "logging", {"enabled", "level", "asyncQueueSize"});
 
         ServerConfig config;
@@ -206,7 +238,7 @@ ServerConfig LoadConfig(const filesystem::path& path) {
         config.database.host = ReadOptional(db, "host", config.database.host, "database.host");
         config.database.port = ReadInteger(db, "port", config.database.port, "database.port");
         config.database.user = ReadOptional(db, "user", config.database.user, "database.user");
-        config.database.password = ReadOptional(db, "password", config.database.password, "database.password");
+        config.database.password = ReadDatabasePassword(db, config.database.password);
         config.database.name = ReadOptional(db, "name", config.database.name, "database.name");
         config.database.poolSize = ReadInteger(db, "poolSize", config.database.poolSize, "database.poolSize");
 
@@ -214,6 +246,8 @@ ServerConfig LoadConfig(const filesystem::path& path) {
         config.tls.certificate = ReadOptional(tls, "certificate", config.tls.certificate, "tls.certificate");
         config.tls.privateKey = ReadOptional(tls, "privateKey", config.tls.privateKey, "tls.privateKey");
         config.tls.clientCaFile = ReadOptional(tls, "clientCaFile", config.tls.clientCaFile, "tls.clientCaFile");
+        config.tls.requireClientCertificate = ReadOptional(tls, "requireClientCertificate",
+            config.tls.requireClientCertificate, "tls.requireClientCertificate");
 
         config.logging.enabled = ReadOptional(logging, "enabled", config.logging.enabled, "logging.enabled");
         config.logging.level = ReadInteger(logging, "level", config.logging.level, "logging.level");

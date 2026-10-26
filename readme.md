@@ -61,22 +61,31 @@ CREATE TABLE IF NOT EXISTS user (
 cp config/server.example.toml config/server.toml
 ```
 
-在本机配置中填写 `[database]` 的主机、端口、用户、密码、数据库名和连接池大小。默认启用数据库连接池，普通静态页面访问也会先初始化连接池。
+在本机配置中填写 `[database]` 的主机、端口、用户、数据库名和连接池大小。模板使用 `passwordEnv = "TINYWEB_DB_PASSWORD"` 指定密码的环境变量名称，真实密码由启动环境提供。默认启用数据库连接池，普通静态页面访问也会先初始化连接池。
+
+原有 `password = "..."` 写法仍兼容；迁移时删除该字段，改为 `passwordEnv`，两项不能同时存在。指定的环境变量未设置或为空时，Loader 会明确报错。原有空密码配置继续允许使用 `password = ""`。
 
 配置字段使用驼峰命名并区分大小写，未知字段和类型错误会阻止启动。`documentRoot`、证书和私钥等配置内的相对路径，以配置文件所在目录为基准；模板中的 `../rss` 指向项目资源目录。
 
-编译并启动：
+在 Bash 终端逐条执行以下命令；`read` 会等待输入密码，输入内容不回显。`export` 使启动的服务器进程能够读取该变量：
 
 ```bash
 make
+read -r -s -p 'MySQL password: ' TINYWEB_DB_PASSWORD
+printf '\n'
+export TINYWEB_DB_PASSWORD
 bin/server --config config/server.toml
 ```
 
 不带参数时同样读取 `config/server.toml`；`bin/server --help` 查看启动格式。跨目录启动时，使用可执行文件和配置文件的绝对路径。日志当前仍写入启动工作目录下的 `./log`。
 
-开启 HTTPS 时，在本机准备证书和私钥，将 `[tls]` 的 `enabled` 设为 `true`，并填写 `certificate` 和 `privateKey`。普通单向 HTTPS 将 `clientCaFile` 留空；当前该字段非空会要求客户端提供受信任的证书。证书与私钥不随仓库分发。
+开启 HTTPS 时，在本机准备证书和私钥，将 `[tls]` 的 `enabled` 设为 `true`，并填写 `certificate` 和 `privateKey`。普通单向 HTTPS 使用 `requireClientCertificate = false`,默认 `clientCaFile` 留空.需要双向 TLS 时设为 true,并填写用于验证客户端的 CA;原先依赖非空 CA 路径开启验证的配置需要显式增加此开关.证书与私钥不随仓库分发。
 
-当前支持启动时 TOML 配置，修改后需要重新启动服务器。环境变量密码、`.env`、运行中配置重载和 `.so` 热更新尚未实现。实施进度见 [配置化与热更新指南](docs/config-and-hot-reload-guide.md)，已知限制见 [HTTPS 问题清单](docs/https-known-issues.md)。
+日志级别 0/1/2/3 分别为 DEBUG/INFO/WARN/ERROR,按最低输出级别过滤.`asyncQueueSize = 0` 使用同步写入,正数指定异步队列容量.日志在数据库实际连接之前初始化;日志、数据库、TLS、epoll 或监听初始化失败时,终端会输出原因,进程返回 1.
+
+当前支持启动时 TOML 配置和进程环境变量密码，修改后需要重新启动服务器。环境变量值会复制到 `ServerConfig`，改变密码来源并不等于加密，也不会改变 MySQL 的账号认证方式。`.env` 文件读取、运行中配置重载和 `.so` 热更新尚未实现。实施进度见 [配置化与热更新指南](docs/config-and-hot-reload-guide.md)，已知限制见 [HTTPS 问题清单](docs/https-known-issues.md)。
+
+仓库的命名、注释、排版及测试目录约定见 [风格Skill参考](docs/skills/tinyweb-style/SKILL.md).
 
 配置读取回归不依赖数据库服务和真实证书：
 
@@ -84,11 +93,38 @@ bin/server --config config/server.toml
 make config-test
 ```
 
-该目标运行 42 项配置检查。HTTP/HTTPS 的其他验证方式见 [测试说明](code/http/test/readme.md)。
+该目标运行 59 项配置检查。HTTP/HTTPS 的其他验证方式见 [测试说明](code/http/test/readme.md)。
+
+数据库连接池和无连接登录失败路径的回归：
+
+```bash
+make sql-test
+```
+
+该目标运行 15 个模拟 MySQL API 的场景，不连接真实数据库。连接池采用池空时返回失败的策略，互斥锁只保护空闲连接队列，执行 SQL 时不持有锁。测试范围和关闭时的生命周期限制见 [连接池说明](code/pool/readme.md)。
+
+测试统一放在对应模块的 `test/` 小目录中,各目录自带 Makefile 和说明,默认测试程序也在本目录生成:
+
+| 测试目录 | 默认程序 | 根目录转发命令 |
+| --- | --- | --- |
+| `code/config/test/` | `configloaderTest` | `make config-test` |
+| `code/pool/test/` | `sqlconnpoolTest` | `make sql-test` |
+| `code/http/test/` | `httpresponseTest` | `make http-test` |
+| `code/http/test/` | `sslcontextTest` | `make http-test` |
+| `code/log/test/` | `logTest` | `make log-test` |
+| `code/server/test/` | `serverStartupTest` | `make server-test` |
+
+可以进入任意上述目录,用 `make` 编译、`make test` 编译并运行、`make clean` 清理该 Makefile 生成的程序.原有 ThreadPoolV2 和 HTTPS 实验测试继续保留原来的单独编译方式,具体见各 test 目录的说明.
+
+五个根目录入口共 116 项检查:配置 59、连接池 15、文件响应 11、TLS 上下文及握手 10、日志 8、启动失败 13.TLS 测试自动签发临时证书并通过内存 BIO 握手,启动测试使用模拟依赖,均不需要本机数据库密码或占用服务端口.真实数据库业务与并发关闭问题仍需独立验收.
 
 本机 `config/server.toml`、`.env`、证书、私钥和构建产物已由 `.gitignore` 忽略。`.vscode` 只共享 C++ 提示配置和文件类型关联，其他本地配置忽略。
 
-先停止旧服务器再重新构建或清理。以下命令会删除 bin 和 log 目录：
+可以在旧服务器运行时执行 `make`。构建只将 `.cpp` 作为编译输入，先在输出目录中的独立临时目录生成可执行文件，成功后通过重命名替换 `bin/server`；编译或链接失败时保留原文件。
+
+旧进程继续运行原来的代码，新版本需要停止旧进程并重新启动后才会生效。重编译不会自动更新正在运行的进程。
+
+建议停止服务器后再清理。以下命令会删除 bin 和 log 目录,并清理上述各 test 目录的 Makefile 生成的测试程序:
 
 ```bash
 make clean

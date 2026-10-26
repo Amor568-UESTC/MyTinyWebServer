@@ -38,6 +38,7 @@ int main(int argc, char* argv[])
         WebServer server(std::move(config));
         server.Start();
     } catch (const std::exception& error) {
+        LOG_ERROR("%s", error.what());
         std::cerr << error.what() << '\n';
         return 1;
     }

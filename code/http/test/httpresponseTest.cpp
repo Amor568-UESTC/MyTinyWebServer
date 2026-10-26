@@ -95,6 +95,9 @@ int main() {
                       field < end && response.Code() == status &&
                       text.starts_with("HTTP/1.1 " + std::to_string(status) + " ") &&
                       before == FdCount();
+            ok = ok && text.find("Connection: keep-alive\r\n") != std::string::npos &&
+                 text.find("keep-alive:") == std::string::npos &&
+                 text.find("Keep-Alive:") == std::string::npos;
             std::string body = end == std::string::npos ? "" : text.substr(end + 4);
             if (response.File()) {
                 body.append(response.File(), response.FileLen());
@@ -144,6 +147,15 @@ int main() {
               "repeated responses keep one mapping and no open fd");
         response.UnmapFile();
         check(MapCount(site.root / "normal.txt") == 0, "unmap releases final mapping");
+        buffer.RetrieveAll();
+        response.Init(site.root.string(), path, false, 200);
+        response.MakeResponse(buffer);
+        const auto closedResponse = buffer.RetrieveAllToString();
+        check(closedResponse.find("Connection: close\r\n") != std::string::npos,
+              "closed response advertises Connection close");
+        check(closedResponse.find("timeout=") == std::string::npos &&
+              closedResponse.find("max=") == std::string::npos,
+              "response does not advertise unsupported keep-alive limits");
         return failures ? 1 : 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL " << error.what() << '\n';

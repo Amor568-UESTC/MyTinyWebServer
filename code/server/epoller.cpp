@@ -1,10 +1,20 @@
 #include"epoller.h"
 
+#include <stdexcept>
+#include <system_error>
+
 using namespace std;
 
-Epoller::Epoller(int maxEvent):epollFd_(epoll_create(512)),events_(maxEvent)
+Epoller::Epoller(int maxEvent) : epollFd_(-1)
 {
-    assert(epollFd_>=0&&events_.size()>0);
+    if (maxEvent <= 0) {
+        throw invalid_argument("epoll event capacity must be positive");
+    }
+    events_.resize(static_cast<size_t>(maxEvent));
+    epollFd_ = epoll_create1(EPOLL_CLOEXEC);
+    if (epollFd_ < 0) {
+        throw system_error(errno, generic_category(), "epoll_create1 failed");
+    }
 }
 
 Epoller::~Epoller() { close(epollFd_);}

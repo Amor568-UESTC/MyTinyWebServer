@@ -1,6 +1,6 @@
 # HTTP / HTTPS 模块说明
 
-更新日期：2026-10-19。以下按当前源码说明；修复状态及未完成项见 [HTTPS 已知问题](../../docs/https-known-issues.md)，测试方式见 [测试说明](test/readme.md)。
+更新日期：2026-10-26。以下按当前源码说明；修复状态及未完成项见 [HTTPS 已知问题](../../docs/https-known-issues.md)，测试方式见 [测试说明](test/readme.md)。
 
 ## 请求解析：HttpRequest
 
@@ -64,6 +64,8 @@ a=1
 
 普通文件、空文件、映射失败及 404 回退等行为由 [文件响应回归](test/httpresponseTest.cpp) 覆盖。
 
+响应只声明实际的 `Connection: keep-alive` 或 `Connection: close`,不再发送没有对应行为支持的固定 `max=6, timeout=120` 参数.空闲超时继续由服务器定时器配置控制.
+
 ## 普通连接：HttpConn
 
 `Init(fd, addr)` 初始化连接，清空读写缓冲区、解析状态及两段 `iovec`。
@@ -90,7 +92,9 @@ a=1
 
 ## TLS 连接：HttpsConn 与 SSLContext
 
-`SSLContext` 加载服务器证书和私钥、检查匹配并创建共享的 `SSL_CTX`。它的 `caPath` 参数用于启用客户端证书校验；向服务器传入 CA 文件会要求客户端提供证书，不等同于让浏览器自动信任服务器证书。
+`SSLContext` 加载服务器证书和私钥、检查匹配并创建共享的 `SSL_CTX`.候选上下文全部校验成功后才发布,失败返回 false,通过 `GetLastError()` 保留具体原因,不发布半成品.
+
+`caPath` 只指定客户端证书的信任源,`requireClientCertificate` 独立控制强制验证,默认 false.开启时必须提供 CA,并设置 `SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT`;关闭时使用 `SSL_VERIFY_NONE`,即使配置了 CA 也不要求客户端证书.这些设置不等同于让浏览器信任服务器证书.仓库内的 [上下文测试](test/sslcontextTest.cpp) 通过真实内存 TLS 握手覆盖这些模式.
 
 每条 `HttpsConn` 通过 `InitSSL()` 创建独立的 `SSL*`、绑定非阻塞 fd，再由服务器调用 `SSLHandShake()` 驱动握手。握手返回 Done、WantRead、WantWrite 或 Failed。
 

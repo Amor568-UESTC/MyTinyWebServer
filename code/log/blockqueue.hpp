@@ -76,8 +76,8 @@ void BlockDeque<T>::Close()
 {
     {
         std::lock_guard<std::mutex> locker(mtx_);
-        deq_.clear();
-        isClose_=1;
+        //关闭后禁止新写入,已有数据由消费者继续排空
+        isClose_ = true;
     }
     condProducer_.notify_all();
     condConsumer_.notify_all();
@@ -115,8 +115,12 @@ template<class T>
 void BlockDeque<T>::push_back(const T& item)
 {
     std::unique_lock<std::mutex> locker(mtx_);
-    while(deq_.size()>=capacity_)
-        condProducer_.wait(locker);
+    condProducer_.wait(locker, [this] {
+        return isClose_ || deq_.size() < capacity_;
+    });
+    if (isClose_) {
+        return;
+    }
     deq_.push_back(item);
     condConsumer_.notify_one();
 }
@@ -125,8 +129,12 @@ template<class T>
 void BlockDeque<T>::push_front(const T& item)
 {
     std::unique_lock<std::mutex> locker(mtx_);
-    while(deq_.size()>=capacity_)
-        condProducer_.wait(locker);
+    condProducer_.wait(locker, [this] {
+        return isClose_ || deq_.size() < capacity_;
+    });
+    if (isClose_) {
+        return;
+    }
     deq_.push_front(item);
     condConsumer_.notify_one();
 }
@@ -135,10 +143,11 @@ template<class T>
 bool BlockDeque<T>::pop(T& item)
 {
     std::unique_lock<std::mutex> locker(mtx_);
-    while(deq_.empty())
-    {
-        condConsumer_.wait(locker);
-        if(isClose_) return 0;
+    condConsumer_.wait(locker, [this] {
+        return isClose_ || !deq_.empty();
+    });
+    if (deq_.empty()) {
+        return false;
     }
     item=deq_.front();
     deq_.pop_front();
@@ -150,11 +159,10 @@ template<class T>
 bool BlockDeque<T>::pop(T& item,int timeout)
 {
     std::unique_lock<std::mutex> locker(mtx_);
-    while(deq_.empty())
-    {
-        if(condConsumer_.wait_for(locker,std::chrono::seconds(timeout))
-            ==std::cv_status::timeout) return 0;
-        if(isClose_) return 0;
+    if (!condConsumer_.wait_for(locker, std::chrono::seconds(timeout), [this] {
+            return isClose_ || !deq_.empty();
+        }) || deq_.empty()) {
+        return false;
     }
     item=deq_.front();
     deq_.pop_front();

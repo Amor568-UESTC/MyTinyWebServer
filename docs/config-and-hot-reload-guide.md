@@ -1,16 +1,16 @@
 # 配置化与 .so 热更新实践指南
 
-首次记录：2026-10-20。最近同步：2026-10-24。本文同时记录当前实现和后续实施路线，尚未实现的部分在各阶段单独标明。
+首次记录：2026-10-20。最近同步：2026-10-26。本文同时记录当前实现和后续实施路线，尚未实现的部分在各阶段单独标明。
 
 | 阶段 | 当前状态 |
 | --- | --- |
 | 一：配置结构 | 已接入，`WebServer` 持有 `const ServerConfig`，替代位置参数和重复配置成员 |
-| 二：TOML Loader | 已实现读取、严格校验、路径解析和 `--config`；仓库内 42 项 Loader 回归通过 |
-| 三：环境变量与可选 `.env` | 待实现；当前密码读取自 TOML 的 `database.password` |
-| 四：模块行为与初始化 | 部分接入，数据库失败处理、日志初始化和实际参数使用仍需完善 |
+| 二：TOML Loader | 已实现读取、严格校验、路径解析和 `--config`；连同环境变量功能，仓库内 59 项 Loader 回归通过 |
+| 三：环境变量与可选 `.env` | 进程环境变量读取已实现，TOML 的 `password` 与 `passwordEnv` 互斥；`.env` 文件读取待实现 |
+| 四：模块行为与初始化 | 日志配置、启动失败回收与退出码、TLS 客户端验证开关和响应头已接入并有自动回归；真实服务与数据库业务仍待验收 |
 | 五～八：业务拆分、插件加载与热更新 | 待实现，下面的接口和命令属于实施计划 |
 
-当前适合提交配置结构与 TOML Loader 的阶段性成果。测试验证了配置解析与校验；真实数据库、HTTP/HTTPS 启动和模块行为仍按阶段四验收。
+配置结构、TOML Loader 和环境变量密码已接入。本轮补齐日志与启动失败处理,并分离客户端 CA 与强制客户端证书开关.测试覆盖配置、模拟数据库、日志、真实内存 TLS 握手和注入的启动失败路径;真实数据库登录注册及完整 HTTP/HTTPS 服务仍需手动验收.
 
 第一轮目标是从 `main()` 移出部署参数；第二轮目标是支持路由和业务代码的 `.so` 热更新。连接、epoll、HTTP 解析、SSL 读写和资源管理继续由主程序持有。
 
@@ -34,11 +34,11 @@
 | 连接 | `server.idleTimeoutMs`、`listenMode`、`connectionMode`、`linger` | 默认超时 60000 ms、监听与连接均为 ET、关闭 linger；超时 0 表示关闭空闲定时器 |
 | 资源 | `server.documentRoot` | 路径由 Loader 解析，`WebServer` 使用配置持有的字符串 |
 | 线程 | `server.workerThreads` | 默认 6，传入线程池 |
-| 数据库 | `database.host`、`port`、`user`、`password`、`name`、`poolSize` | 已传入连接池；用户和库名必须非空，密码允许为空，连接失败处理待完善 |
-| TLS | `tls.enabled`、`certificate`、`privateKey`、`clientCaFile` | 开启时检查证书文件类型；非空 `clientCaFile` 沿用强制验证客户端证书的行为 |
-| 日志 | `logging.enabled`、`level`、`asyncQueueSize` | 已传入日志初始化；队列容量尚未真正传给队列，目录和轮转行数仍写死 |
+| 数据库 | `database.host`、`port`、`user`、`password`、`passwordEnv`、`name`、`poolSize` | `password` 与 `passwordEnv` 互斥,失败时回滚并向 main 上报;用户和库名必须非空 |
+| TLS | `tls.enabled`、`certificate`、`privateKey`、`clientCaFile`、`requireClientCertificate` | CA 只指定信任源,独立开关控制强制客户端验证;开启验证必须提供 CA |
+| 日志 | `logging.enabled`、`level`、`asyncQueueSize` | 最低输出级别与队列容量生效,0 表示同步;目录固定为 ./log,轮转行数固定为 50000 |
 
-字段采用驼峰命名，并且区分大小写；同一行未重复的分组前缀与首字段一致。未来可增加 `server.address`、`listenBacklog`、`maxConnections`、`database.passwordEnv`、`tls.requireClientCertificate`、`logging.directory`、`rotateLines` 和 `plugin.path`。这些字段当前都会被未知字段检查拒绝，不能直接写入本机配置。
+字段采用驼峰命名，并且区分大小写；同一行未重复的分组前缀与首字段一致。未来可增加 `server.address`、`listenBacklog`、`maxConnections`、`logging.directory`、`rotateLines` 和 `plugin.path`。这些字段当前都会被未知字段检查拒绝，不能直接写入本机配置。
 
 以下参数以后可以补，但必须同时实现对应行为：请求头与请求体大小上限、每条连接的请求数上限、握手超时、日志控制台输出。不能只添加配置项就宣称能力已经存在。
 
@@ -113,7 +113,7 @@ documentRoot = "../rss"
 host = "localhost"
 port = 3306
 user = "your_user"
-password = "replace_with_local_password"
+passwordEnv = "TINYWEB_DB_PASSWORD"
 name = "yourdb"
 poolSize = 12
 
@@ -122,6 +122,7 @@ enabled = false
 certificate = "../ssl/lan-server.crt"
 privateKey = "../ssl/lan-server.key"
 clientCaFile = ""
+requireClientCertificate = false
 
 [logging]
 enabled = true
@@ -136,6 +137,7 @@ asyncQueueSize = 1024
 - 命令行中的配置文件路径仍按通常规则相对于启动目录；跨目录启动时使用绝对配置路径。
 - 缺失的可选字段才使用默认值。字段类型错误、未知字段、非法枚举和溢出应报错，避免拼错字段后静默使用默认值。
 - `ReadInteger()` 先读取 `int64_t`，检查 `int` 范围后再转换；布尔值和字符串采用严格类型读取。
+- 密码通过 `password` 或 `passwordEnv` 二选一；后者要求指定的进程环境变量已经设置且非空，不自动读取 `.env`。
 - `ResolvePath()` 使用 `weakly_canonical()` 整理路径，随后独立检查目录或普通文件类型；TLS 关闭时允许证书路径为空或目标尚不存在。
 - TOML 解析错误包含配置文件、行列及原因；字段校验错误包含配置文件、字段和原因。`main()` 捕获异常并通过 `stderr` 输出，此时日志系统可能尚未启动。
 
@@ -148,12 +150,12 @@ asyncQueueSize = 1024
 | 工作线程数、数据库连接池大小 | 正数，并限制在 `int` 范围内；实际可分配资源仍取决于运行环境 |
 | 空闲超时 | 非负，明确约定 0 表示关闭空闲定时器 |
 | 日志队列容量 | 非负，0 表示同步日志，正数表示异步队列容量 |
-| 日志级别 | 整数 0～3，分别为 DEBUG、INFO、WARN、ERROR；当前阈值比较方向待阶段四修正 |
-| 数据库文本 | 主机、用户、库名非空；密码允许为空；文本拒绝嵌入 NUL |
+| 日志级别 | 整数 0～3,分别为 DEBUG、INFO、WARN、ERROR;消息级别不低于配置阈值时输出 |
+| 数据库文本 | 主机、用户、库名非空；直接填写的密码允许为空；环境变量名非空且不含 NUL 或 `=`，指定的变量必须存在且值非空 |
 | 资源目录 | 必须是已存在的目录 |
 | 证书和私钥 | TLS 开启时必须是已存在的普通文件，客户端 CA 非空时也检查；内容有效性与私钥匹配由 TLS 初始化继续检查 |
 
-当前 `clientCaFile` 非空会开启强制客户端证书验证。普通手机、浏览器的单向 HTTPS 使用空字符串；独立的 `requireClientCertificate` 开关留到阶段四实现。
+普通手机、浏览器的单向 HTTPS 使用 `requireClientCertificate = false`.填写 `clientCaFile` 不会自动要求客户端提供证书;设为 true 时必须提供 CA 文件,握手时拒绝没有证书或证书不受信任的客户端.原先依赖非空 CA 路径开启双向 TLS 的配置,需要显式添加此开关.
 
 当前日志路径仍相对于启动工作目录使用 `./log`，不属于 Loader 的路径解析范围。
 
@@ -164,10 +166,15 @@ asyncQueueSize = 1024
 ```bash
 cp config/server.example.toml config/server.toml
 make
+read -r -s -p 'MySQL password: ' TINYWEB_DB_PASSWORD
+printf '\n'
+export TINYWEB_DB_PASSWORD
 bin/server --config config/server.toml
 ```
 
-修改配置后重新启动服务器即可生效；当前不支持运行中重载。覆盖可执行文件前先停止旧进程。
+以上 Bash 命令逐条执行；`read` 会等待输入密码，`export` 让服务器子进程继承该变量。已有本机配置若仍使用 `password`，可以继续使用；迁移时先准备环境变量，再把 `password` 字段替换为 `passwordEnv`。
+
+修改配置后重新启动服务器即可生效；当前不支持运行中重载。修改代码后可以在旧进程运行期间执行 `make`：构建只编译 `.cpp`，先在输出目录中的独立临时目录生成可执行文件，再通过重命名替换 `bin/server`。失败时保留原文件，成功后旧进程仍使用旧代码，需停止并重新启动才能运行新版。
 
 独立运行配置回归：
 
@@ -175,7 +182,9 @@ bin/server --config config/server.toml
 make config-test
 ```
 
-[configloaderTest.cpp](../code/config/test/configloaderTest.cpp) 自动准备和清理临时目录，不依赖 MySQL 服务或真实证书。42 项检查覆盖字段与默认值、类型和数值范围、未知字段、模式、路径基准、文件类型、NUL、TOML 语法及缺失文件。测试中的证书文件只是类型检查占位文件，不证明 TLS 内容有效。
+[configloaderTest.cpp](../code/config/test/configloaderTest.cpp) 自动准备和清理临时目录，不依赖 MySQL 服务或真实证书。59 项检查覆盖字段与默认值、类型和数值范围、未知字段、模式、路径基准、文件类型、NUL、TOML 语法及缺失文件，也覆盖环境变量密码、值的复制和特殊字符、缺失及空值、来源冲突和错误信息不输出密码。测试中的证书文件只是类型检查占位文件，不证明 TLS 内容有效。
+
+测试的独立 Makefile 和说明位于 [code/config/test/](../code/config/test/readme.md).可以进入该目录执行 `make test`,默认程序也生成在该目录;根目录命令只负责转发.其他新增回归同样按 `code/<模块>/test/` 组织,不把测试编译规则集中到服务器的 build/Makefile 中.
 
 本轮还通过了完整服务器编译与链接，以及 `--help`、非法命令行参数、缺失配置文件的启动检查。真实 MySQL、HTTP/HTTPS 服务与模块行为留在阶段四继续验收。
 
@@ -190,20 +199,21 @@ make config-test
 
 ## 5. 阶段三：支持环境变量和可选 .env
 
-状态：待实现。环境变量支持可以独立提交，`.env` 是可选的后续便利功能。
+状态：进程环境变量读取已实现，`.env` 文件读取待实现。两部分可以独立提交。
 
-TOML 保存结构化配置，环境变量用于启动时注入部署参数，`.env` 则是本地保存这些变量的文本文件。分开并非技术要求，当前也可继续在被忽略的本机 TOML 中保存密码。两种文件都是明文，`.env` 不提供加密。
+TOML 保存结构化配置，环境变量用于启动时注入部署参数，`.env` 则是本地保存这些变量的文本文件。使用 `passwordEnv` 后，公共配置只需要保存变量名，可以在开发、测试和部署时分别提供密码，也便于后续接入服务管理器或 CI 的秘密变量。
 
-### 实现步骤
+分开并非技术要求，当前仍兼容被忽略的本机 TOML 中的 `password`。环境变量值会进入进程内存，`.env` 文件也是明文；这一步改变密码的来源，不等于加密，也不会改变 MySQL 账号的认证插件或修复账号权限错误。
 
-1. 为 Loader 增加 `database.passwordEnv` 字段及白名单，通过 `std::getenv()` 读取指定变量。复制读取结果到 `config.database.password`，不长期保存环境字符串指针。TOML 解析器不会自动替换环境变量。
-2. 约定 `password` 与 `passwordEnv` 不能同时填写；指定变量不存在时明确报错。是否允许变量值为空需要单独约定，不回退为源码中的旧密码。
-3. 再按需要增加 `--env-file <文件>`。它应由程序显式加载，`getenv()` 本身不会读取 `.env`。
-4. 将第一版 `.env` 语法限制为清楚的键值、空行和注释，不执行文件里的 shell 命令。若使用现成解析库，记录其引号、转义规则。
-5. 约定进程环境变量优先于 `.env` 中的同名值，方便部署时覆盖本机默认值。
-6. 在最终 `Validate()` 之前完成来源选择与值合并，再初始化服务器；第一版只在启动时读取。
+### 已实现的读取规则
 
-待实现的 TOML 用法：
+1. `ReadDatabasePassword()` 读取 `database.passwordEnv`，通过 `std::getenv()` 查询进程环境，并将结果复制到 `config.database.password`。`ServerConfig` 仍只保存最终密码，SQL 连接池接口无需改变。
+2. `password` 与 `passwordEnv` 按字段是否存在判断互斥，即使 `password = ""` 也不能与 `passwordEnv` 同时填写。
+3. 环境变量名必须非空且不含 NUL 或 `=`；变量不存在或值为空时，启动明确报错。错误中不拼接密码值。
+4. 直接填写的 `password` 保持字符串语义，不会把它当作变量名。原有空密码可以显式写 `password = ""`；两项均省略时仍保留原来的默认空密码行为。
+5. 在最终 `Validate()` 之前完成来源选择和值复制，之后再初始化服务器。修改父终端中的环境变量不会改变已运行进程中的配置，重启后才使用新值。
+
+当前 TOML 用法：
 
 ```toml
 [database]
@@ -213,7 +223,15 @@ name = "yourdb"
 passwordEnv = "TINYWEB_DB_PASSWORD"
 ```
 
-`.env.example` 只保存占位值：
+TOML 解析器不会自动替换 `${TINYWEB_DB_PASSWORD}`；应使用专门的 `passwordEnv` 字段。
+
+### 可选的 .env 文件读取：待实现
+
+1. 按需要增加 `--env-file <文件>`。文件应由程序显式加载，`getenv()` 本身不会读取 `.env`。
+2. 第一版语法限制为清楚的键值、空行和注释，不执行文件里的 shell 命令；若使用现成解析库，记录其引号和转义规则。
+3. 约定同名进程环境变量优先于 `.env` 中的值，在最终 `Validate()` 前完成合并。
+
+未来的 `.env.example` 只保存占位值：
 
 ```dotenv
 TINYWEB_DB_PASSWORD=replace_with_local_password
@@ -231,16 +249,19 @@ bin/server --config config/server.toml --env-file .env
 
 ### 验收
 
+- [x] 环境变量值被复制到配置，特殊字符保持原样，修改环境不影响已经加载的配置。
+- [x] 缺失变量、空值、错误类型、非法变量名和两种密码来源冲突均明确报错。
+- [x] 原有 TOML 密码和空密码规则有回归覆盖。
+- [x] 配置校验错误不输出 TOML 密码或环境变量密码值。
 - [ ] 同名进程环境变量能够覆盖 `.env` 中的值。
-- [ ] 必需变量缺失、指定的环境文件不存在或格式不合法时，有明确错误。
-- [ ] 配置摘要只显示数据库主机、库名等非秘密信息。
-- [ ] `git diff` 中没有真实密码、证书或私钥。
+- [ ] 指定的 `.env` 文件不存在或格式不合法时，有明确错误。
+- [ ] 使用有效数据库账号完成实际启动和登录注册验证。
 
 ## 6. 阶段四：接入各模块，并修正配置与实际行为的差异
 
-状态：部分接入。端口、模式、超时、资源路径、线程数以及数据库和 TLS 参数已使用 `config_`，下面集中记录已完成的接入和仍待修正的行为。
+状态:模块行为修正已接入并通过自动回归.数据库、日志、TLS、epoll 和监听的初始化失败会向 main 传播,不再仅设置关闭标志后正常退出.真实数据库业务与完整服务端验收仍待进行.
 
-启动流程建议为：读取文件 → 合并环境值 → 校验并解析路径 → 初始化日志 → 初始化数据库、TLS 等依赖 → 准备监听和工作线程 → 进入事件循环。信号接入时还需在任何线程创建之前设置信号屏蔽，见第 10 节。
+启动流程建议为：读取文件 → 合并环境值 → 校验并解析路径 → 初始化 MySQL 客户端库 → 初始化日志 → 建立数据库连接、初始化 TLS 等依赖 → 准备监听和工作线程 → 进入事件循环。MySQL 客户端库的进程级初始化要早于异步日志和工作线程的创建；当前由主线程首次取得连接池单例时执行。信号接入时还需在任何线程创建之前设置信号屏蔽，见第 10 节。
 
 这里需要让初始化失败可向上层返回，不能只打印错误后继续启动。
 
@@ -248,26 +269,38 @@ bin/server --config config/server.toml --env-file .env
 | --- | --- |
 | `WebServer::initSocket_()` | 已读取配置端口和 linger；监听地址、backlog、连接上限仍固定，后续添加对应字段时再接入 |
 | `WebServer` 构造与资源目录 | 已使用 Loader 解析后的路径并移除旧的 `getcwd()`、拼接和 `free()`；工作线程与配置存储的关闭协调仍按问题 6 安排 |
-| `SqlConnPool::Init()` | 已接收配置主机与其他参数；待增加可检查的初始化结果，连接失败时不能把空指针当作可用连接入池，并清理失败资源 |
-| `Log::init()` | 在其他模块需要日志前初始化；把 `maxQueueCapacity` 真正传给 `BlockDeque`，轮转条件使用配置值 |
-| `LOG_BASE` | 若把级别定义为最低输出阈值，应使用 `消息级别 >= 配置阈值`；当前比较方向相反 |
-| `SSLContext` 初始化 | TLS 开关和路径已接入；待将客户端 CA 与是否要求客户端证书分开处理 |
-| 初始化失败上报 | 当前 TLS 或监听失败会设置关闭标志；待让启动失败明确返回非零退出码，并保证关闭日志时也能看到原因 |
-| `HttpResponse::AddHeader_()` | 当前固定输出 `max=6, timeout=120`，但没有对应次数限制，空闲超时已可配置；删除无依据的参数，或补齐真实行为后再输出 |
+| `SqlConnPool::Init()` | 已采用临时资源所有者，全部连接成功后才发布；失败时清理已创建的句柄并抛异常，`main()` 输出原因并返回非零退出码 |
+| 数据库连接借还 | 已改为同一把互斥锁保护检查、取出和归还；池空时返回 `nullptr`，具名 RAII 归还一次；关闭后归还的连接直接关闭 |
+| `Log::init()` | MySQL 库初始化后、实际连接前初始化日志;文件与指定容量的队列准备成功后才启动写线程,失败时回收资源并抛异常 |
+| `LOG_BASE` | 已使用 `消息级别 >= 配置阈值`,INFO 保留 INFO/WARN/ERROR 并隐藏 DEBUG |
+| `SSLContext` 初始化 | 候选上下文全部校验成功后才发布;`clientCaFile` 与 `requireClientCertificate` 分开,失败保留具体 OpenSSL 错误 |
+| 初始化失败上报 | main 始终输出 stderr 并返回 1;构造失败回收监听 fd 和已建立的空闲数据库连接,日志关闭时错误仍可见 |
+| `HttpResponse::AddHeader_()` | 已删除没有实际行为支持的 `max=6, timeout=120`,保留实际 Connection 选项 |
 
-这里的“提前初始化日志”包括调整构造过程：当前线程池在成员初始化列表中创建，仅移动构造函数体内的日志代码并不能改变线程的创建时间。
+当前由主线程先取得 SQL 池单例完成库初始化,再初始化日志、连接数据库、初始化 TLS 和监听,最后创建工作线程.日志队列关闭后排空已有记录再退出;同步或异步写入共用文件锁,日期转换采用 localtime_r,格式化前按实际长度扩容.这些日志修正不替代连接与工作线程的关闭协调.
+
+日志目录与 50000 行轮转阈值仍是固定行为,尚无 `logging.directory` 或 `rotateLines` 配置.本轮清理了未使用的重复轮转成员,不新增未接入的字段.
+
+连接池没有等待连接归还的需求，因此不再使用信号量计数。互斥锁只覆盖空闲队列和池状态的访问，调用者执行 SQL 时不持有池的锁。若以后需要等待连接，可再引入信号量或条件变量，队列仍需互斥保护。
+
+`ClosePool()` 只关闭空闲连接并禁止新借出；借出的连接归还时再关闭。池对象必须活到所有借出者结束之后。`mysql_library_end()` 需要在全部 MySQL 使用线程退出后由进程统一调用，不能在可重复调用的 `ClosePool()` 中执行；这部分退出协调仍按原问题 6 安排。
 
 当前配置只在启动时读取。以后增加的监听地址、日志输出目录等字段也先作为启动参数；不要收到重载请求就逐项修改正在使用的对象。
 
 ### 验收
 
-- [ ] 数据库、TLS、监听初始化失败时，不进入正常服务循环；错误能够被看到。
-- [ ] 日志级别为 `info` 时输出 INFO/WARN/ERROR，隐藏 DEBUG；队列容量与配置一致。
-- [ ] HTTP 和 HTTPS 页面访问、文件响应回归仍通过。
-- [ ] 保持请求解析行为；无可用数据库时登录验证不会因空连接断言退出。
-- [ ] 先停止旧进程再覆盖其可执行文件；本阶段仍采用重启生效。
+- [x] 数据库、TLS、日志、epoll 和监听初始化失败返回 1,不进入服务循环;13 个注入场景覆盖 stderr、fd 回收与数据库连接清理。
+- [x] 数据库初始化部分失败时释放临时句柄，不发布半初始化的连接池。
+- [x] 连接借还、池耗尽、线程状态和无连接时的登录失败有仓库内回归覆盖。
+- [x] 日志 INFO 阈值与队列容量生效;8 项日志回归还覆盖关闭排空、失败重试、并发写入、长记录和轮转。
+- [x] 11 项文件响应回归、10 项内存 BIO 的真实 TLS 握手与上下文失败回归通过。
+- [ ] 使用有效数据库账号完成完整 HTTP/HTTPS 页面及登录注册手动验收。
+- [x] 无可用连接时登录请求返回失败，不再因空连接断言退出；尚未替代真实数据库登录注册验收。
+- [ ] 运行期间重建时，成功后旧进程继续运行，失败时磁盘上的原可执行文件保留；实际部署新版仍采用停止旧进程后重新启动。
 
-既有回归的编译方式见 [HTTP / HTTPS 测试说明](../code/http/test/readme.md)。数据库无连接回归只证明失败路径，不代表正确账号下的登录注册已经通过。
+数据库连接池回归可以在 `code/pool/test/` 中执行 `make test`,或在项目根目录执行转发命令 `make sql-test`.当前包含 15 个场景,使用模拟 MySQL API,不连接本机数据库.详细说明见 [连接池测试目录](../code/pool/test/readme.md).文件响应回归也有独立的 `code/http/test/Makefile`,根目录可执行 `make http-test`.旧 HTTPS 实验程序的编译方式见 [测试说明](../code/http/test/readme.md).这些检查不代表正确账号下的真实登录注册已经通过.
+
+新增 [日志测试](../code/log/test/readme.md) 和 [启动失败测试](../code/server/test/readme.md),根目录分别执行 `make log-test` 与 `make server-test`.启动失败测试调用真实 main,只在测试二进制中替换 MySQL 和网络操作,不会连接数据库或占用端口.全部五个入口合计 116 项检查.
 
 ## 7. 阶段五：先分离业务，再考虑动态库
 
@@ -516,7 +549,7 @@ feat(config): load and validate server settings from TOML
 7. `feat(plugin): switch module versions while retaining active handlers`：版本快照与延迟释放。
 8. `feat(server): trigger plugin reload through signalfd`：明确的重载触发。
 
-当前先收尾并提交阶段一、二，随后实现阶段三的环境变量读取，按需要增加 `.env`，再处理阶段四的实际行为差异。业务插件与热更新留到这些启动行为明确之后。
+阶段一至四的代码接入与自动回归已完成,可保存阶段性提交,并继续阶段五的业务拆分.真实账号下的页面和登录注册验收仍需补充;`.env` 文件读取按需要增加,运行中关闭协调继续单独安排.
 
 提交前执行 `make config-test`、完整构建和 `git diff HEAD --check`，并检查暂存区内容。仓库保留 `.vscode/c_cpp_properties.json` 和 `settings.json` 这两份共享配置，其他 VS Code 本地配置忽略；本机 TOML、`.env`、私钥、日志和构建产物不提交。
 

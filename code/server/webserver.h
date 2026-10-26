@@ -22,8 +22,9 @@
 class WebServer
 {
 private:
-    bool initSocket_();
-    bool initSSL_(const char* certPath, const char* keyPath, const char* caPath);
+    void initSocket_();
+    bool initSSL_(const char* certPath, const char* keyPath, const char* caPath,
+                  bool requireClientCertificate);
     void InitEventMode_(TriggerMode listenMode, TriggerMode connectionMode);
     void AddClient_(int fd, sockaddr_in addr);
 

@@ -17,6 +17,7 @@ private:
     
     std::unique_ptr<SSL_CTX, SSLCTXDeleter> ctx_;
     bool initialized_ = false;
+    std::string lastError_;
 
     SSLContext() = default;
 
@@ -28,11 +29,14 @@ public:
 
     bool Initialize(const char* certPath,
         const char* keyPath,
-        const char* caPath);
+        const char* caPath = nullptr,
+        bool requireClientCertificate = false);
 
     bool Initialize(const std::string& certPath,
         const std::string& keyPath,
-        const std::string& caPath = "");
+        const std::string& caPath = "",
+        bool requireClientCertificate = false);
 
     SSL_CTX* GetContext() const { return ctx_.get(); }
+    const std::string& GetLastError() const { return lastError_; }
 };

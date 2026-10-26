@@ -20,13 +20,11 @@ private:
     void AppendLogLevelTitle_(int level);
     void AsyncWrite_();
 
-    static const int LOG_PATH_LEN=256;
-    static const int LOG_NAME_LEN=256;
     static const int MAX_LINES=50000;
 
-    const char* path_;
-    const char* suffix_;
-    int MAX_LINES_;
+    //使用string,取消最大长度限制
+    std::string path_;
+    std::string suffix_;
     int lineCnt_;
     int toDay_;
     int level_;
@@ -48,15 +46,15 @@ public:
 
     int GetLevel();
     void SetLevel(int level);
-    bool IsOpen() {return isOpen_;}
+    bool IsOpen();
+    size_t GetQueueCapacity();
 };
 
 #define LOG_BASE(level,format,...) \
     do \
     {\
         Log* log=Log::Instance();\
-        if(log->IsOpen()&&log->GetLevel()>=level) \
-        {\
+        if (log->IsOpen() && (level) >= log->GetLevel()) {\
             log->write(level,format,##__VA_ARGS__); \
             log->flush(); \
         }\
