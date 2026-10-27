@@ -1,17 +1,19 @@
 CXX = g++
 CFLAGS = -std=c++23 -O0 -Wall -g
 
-#默认只构建文件响应回归,旧HTTPS实验程序保持原有编译方式
+#构建解析、响应、连接处理链和TLS上下文回归,旧实验程序保留独立入口
 BIN_DIR ?= .
 TEST_PROGRAM := $(BIN_DIR)/httpresponseTest
 TLS_TEST_PROGRAM := $(BIN_DIR)/sslcontextTest
+REQUEST_TEST_PROGRAM := $(BIN_DIR)/httprequestTest
+PROCESS_TEST_PROGRAM := $(BIN_DIR)/httpconnProcessTest
 SOURCES := httpresponseTest.cpp ../httpresponse.cpp ../../buffer/buffer.cpp ../../log/log.cpp
 HEADERS := $(wildcard ../httpresponse.h ../../buffer/*.h ../../log/*.h ../../log/*.hpp)
 
 .PHONY: all test clean
 .DELETE_ON_ERROR:
 
-all: $(TEST_PROGRAM) $(TLS_TEST_PROGRAM)
+all: $(TEST_PROGRAM) $(TLS_TEST_PROGRAM) $(REQUEST_TEST_PROGRAM) $(PROCESS_TEST_PROGRAM)
 
 $(TEST_PROGRAM): $(SOURCES) $(HEADERS) Makefile
 	mkdir -p "$(BIN_DIR)"
@@ -22,8 +24,21 @@ $(TLS_TEST_PROGRAM): sslcontextTest.cpp ../sslContext.cpp ../sslContext.h ../../
 	$(CXX) $(CPPFLAGS) $(CFLAGS) -pthread sslcontextTest.cpp ../sslContext.cpp \
 		../../buffer/buffer.cpp ../../log/log.cpp -o "$@" -lssl -lcrypto
 
-test: $(TEST_PROGRAM) $(TLS_TEST_PROGRAM)
+$(REQUEST_TEST_PROGRAM): httprequestTest.cpp ../httprequest.cpp ../httprequest.h ../../buffer/buffer.cpp ../../log/log.cpp $(HEADERS) Makefile
+	mkdir -p "$(BIN_DIR)"
+	$(CXX) $(CPPFLAGS) $(CFLAGS) -pthread httprequestTest.cpp ../httprequest.cpp \
+		../../buffer/buffer.cpp ../../log/log.cpp -o "$@"
+
+$(PROCESS_TEST_PROGRAM): httpconnProcessTest.cpp ../httpconn.cpp ../httprequest.cpp ../httpresponse.cpp $(wildcard ../../handler/*.cpp ../../handler/*.h ../../pool/*.h) ../httpconn.h ../httprequest.h ../../buffer/iobuffer.cpp ../../buffer/iobuffer.h ../../buffer/buffer.cpp ../../pool/sqlconnpool.cpp ../../log/log.cpp $(HEADERS) Makefile
+	mkdir -p "$(BIN_DIR)"
+	$(CXX) $(CPPFLAGS) $(CFLAGS) -pthread httpconnProcessTest.cpp ../httpconn.cpp \
+		../httprequest.cpp ../httpresponse.cpp ../../handler/*.cpp ../../pool/sqlconnpool.cpp \
+		../../buffer/buffer.cpp ../../buffer/iobuffer.cpp ../../log/log.cpp -o "$@" -lmysqlclient -lssl -lcrypto
+
+test: $(TEST_PROGRAM) $(TLS_TEST_PROGRAM) $(REQUEST_TEST_PROGRAM) $(PROCESS_TEST_PROGRAM)
 	"$(TEST_PROGRAM)"
+	"$(REQUEST_TEST_PROGRAM)"
+	"$(PROCESS_TEST_PROGRAM)"
 	@set -e; \
 	testCases=$$("$(TLS_TEST_PROGRAM)" --list); \
 	for testCase in $$testCases; do \
@@ -31,4 +46,4 @@ test: $(TEST_PROGRAM) $(TLS_TEST_PROGRAM)
 	done
 
 clean:
-	rm -f -- "$(TEST_PROGRAM)" "$(TLS_TEST_PROGRAM)"
+	rm -f -- "$(TEST_PROGRAM)" "$(TLS_TEST_PROGRAM)" "$(REQUEST_TEST_PROGRAM)" "$(PROCESS_TEST_PROGRAM)"

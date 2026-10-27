@@ -1,4 +1,4 @@
-.PHONY: all clean config-test sql-test http-test log-test server-test
+.PHONY: all clean config-test sql-test http-test log-test server-test handler-test
 
 all:
 	$(MAKE) -C build
@@ -20,4 +20,7 @@ log-test:
 
 server-test:
 	$(MAKE) -C build server-test
+
+handler-test:
+	$(MAKE) -C build handler-test
 

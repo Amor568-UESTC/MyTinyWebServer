@@ -156,6 +156,43 @@ int main() {
         check(closedResponse.find("timeout=") == std::string::npos &&
               closedResponse.find("max=") == std::string::npos,
               "response does not advertise unsupported keep-alive limits");
+
+        buffer.RetrieveAll();
+        std::string body = "version-v1\n";
+        response.MakeTextResponse(buffer, body, "text/plain; charset=utf-8", true);
+        body.assign("changed after response generation");
+        const auto textResponse = buffer.RetrieveAllToString();
+        check(!response.File() && response.FileLen() == 0 && MapCount(site.root / "normal.txt") == 0 &&
+              textResponse.ends_with("\r\n\r\nversion-v1\n") &&
+              textResponse.find("Content-length: 11\r\n") != std::string::npos,
+              "text response owns its body and releases the previous file mapping");
+
+        const std::string binaryBody("a\0b", 3);
+        response.MakeTextResponse(buffer, binaryBody, "application/octet-stream", false);
+        const auto binaryResponse = buffer.RetrieveAllToString();
+        check(binaryResponse.ends_with(binaryBody) &&
+              binaryResponse.find("Content-length: 3\r\n") != std::string::npos,
+              "inline response length includes embedded NUL bytes");
+
+        response.MakeTextResponse(buffer, "", "text/plain", false, 500);
+        const auto emptyResponse = buffer.RetrieveAllToString();
+        check(emptyResponse.starts_with("HTTP/1.1 500 Internal Server Error\r\n") &&
+              emptyResponse.find("Content-length: 0\r\n\r\n") != std::string::npos,
+              "empty inline error response preserves its status and length");
+        bool rejected = false;
+        try {
+            response.MakeTextResponse(buffer, "body", "text/plain\r\nInjected: yes", false);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        check(rejected && buffer.ReadableBytes() == 0, "invalid content type is rejected before writing headers");
+        run("file response recovers after an inline response", "/normal.txt", 200, false, "normal-content");
+        buffer.RetrieveAll();
+        response.Init(site.root.string(), "/400.html", false, 400);
+        response.MakeResponse(buffer);
+        check(buffer.RetrieveAllToString().starts_with("HTTP/1.1 400 Bad Request\r\n") &&
+              !response.File() && response.FileLen() == 0,
+              "missing error page preserves the requested 400 status");
         return failures ? 1 : 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL " << error.what() << '\n';

@@ -1,6 +1,6 @@
 # HTTP / HTTPS 模块说明
 
-更新日期：2026-10-26。以下按当前源码说明；修复状态及未完成项见 [HTTPS 已知问题](../../docs/https-known-issues.md)，测试方式见 [测试说明](test/readme.md)。
+更新日期：2026-10-27。以下按当前源码说明；修复状态及未完成项见 [HTTPS 已知问题](../../docs/https-known-issues.md)，测试方式见 [测试说明](test/readme.md)。
 
 ## 请求解析：HttpRequest
 
@@ -29,11 +29,12 @@ a=1
 
 源码仍保留旧的 `HTTP_CODE` 枚举，但当前 `parse()` 的返回类型是 `ParseRes`。
 
-- `ParseRequestLine_()` 提取方法、路径和版本；`ParsePath_()` 将首页及部分无后缀页面名映射到资源路径。
+- `ParseRequestLine_()` 提取方法、原始路径和版本,首页和页面别名映射移到业务层,解析器不再修改业务路径.
 - `ParseHeader_()` 校验字段名和字段值，头字段名统一转为小写。先检查全部字符，再保存一次字段。
 - `FinishHeadrs_()` 在空行处校验消息定界：拒绝当前未支持的 Transfer-Encoding，用 `from_chars` 完整解析非负 Content-Length，拒绝重复或非法长度；缺失长度时请求体长度为 0。
 - BODY 状态等待完整的 `contentLength_` 字节，消费当前请求体，不吞掉下一请求的数据。
-- `ParsePost_()` 根据小写字段名 `content-type` 识别表单类型，也接受媒体类型后的参数。`ParseFromUrlencoded_()` 写入 `post_`，登录、注册路径再通过 `UserVerify()` 访问 SQL 连接池。
+- `IsFormUrlencoded()` 识别表单类型及媒体类型参数.POST 表单由 `ParseFromUrlencoded_()` 解码到 post_,原始 body_ 保持不变.解析器不依赖 MySQL 头文件或客户端库,不执行数据库访问或登录注册.
+- 表单按 & 分隔,按第一个 = 区分键值,+ 解码为空格,%HH 解码为字节,重复键保留最后一个值.不完整或非法的百分号编码返回 BadRequest,不记录含密码的请求正文或表单值.
 - `Init()` 清空请求数据并回到 REQUEST_LINE。分段接收时不能每次调用它，否则会丢失前一段的解析状态。
 
 `IsKeepAlive()` 当前要求 HTTP/1.1 且 Connection 中有完整的 `keep-alive` 选项，同时没有 `close`。选项按逗号拆分、去除两端空格/制表符并忽略大小写；当前实现并不默认保持所有 HTTP/1.1 连接。
@@ -60,6 +61,8 @@ a=1
 
 `MakeResponse()` 先确定文件映射结果，再生成状态行和响应头。文件准备成功时输出对应 Content-Length；无法准备文件时生成内联 HTML 错误正文，其 Content-Length 按实际正文计算。映射失败返回 `500 Internal Server Error`，内联错误响应使用 HTML 类型。
 
+业务已经确定的错误状态不会因错误页面缺失而被覆盖,例如没有 400.html 时仍返回内联 400 正文.MakeTextResponse() 支持业务提供的自有正文和 Content-Type,释放旧映射并将正文复制到 writeBuff_;长度按字节计算,拒绝带控制字符的类型字段.
+
 文件正文没有复制进 `writeBuff_`。每个响应持有自己的映射，这不是跨连接的文件缓存。只有旧响应不再被发送使用时，才能释放其映射。
 
 普通文件、空文件、映射失败及 404 回退等行为由 [文件响应回归](test/httpresponseTest.cpp) 覆盖。
@@ -84,7 +87,7 @@ a=1
 
 1. 仅在上一请求已完成后重置请求解析器。
 2. 调用 `parse()`；NeedMore 时返回 false，暂不构造响应。
-3. Complete 时准备正常响应，BadRequest 时准备 400 响应。
+3. Complete 时调用 RequestHandler,根据 HandlerResult 选择文件或文本响应;BadRequest 时准备 400 响应,不调用业务层.
 4. 结合请求的 Keep-Alive 选项、读方向关闭状态和缓冲中的后续数据决定 `keepAlive_`。
 5. 构造响应，并让 iovec 指向响应缓冲区和可用的文件映射。
 
@@ -123,3 +126,5 @@ TLS 读取使用最多 16 KiB 的缓冲区；`HttpsConn::write()` 和 `IOBuffer:
 - `OnWrite_()` 先处理 TLS 状态和挂起操作，再进行 HTTP/HTTPS 共用的剩余数据检查；发送完成后根据 Keep-Alive 决定继续处理或关闭。
 
 登录、注册依赖正确配置的 MySQL 连接池；本轮 HTTP/TLS 边界回归未覆盖全部数据库业务。
+
+业务路由和参数化数据库操作见 [handler 模块](../handler/readme.md).文本与文件响应切换、连续请求和资源目录约束由 httpconnProcessTest 覆盖,其中仅在内存中驱动处理链,没有创建网络连接.

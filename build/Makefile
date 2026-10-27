@@ -8,9 +8,9 @@ BIN_DIR ?= ../bin
 # 头文件由 #include 引入，不作为独立编译输入。
 SOURCES := $(wildcard ../code/buffer/*.cpp ../code/pool/*.cpp ../code/log/*.cpp \
 	../code/http/*.cpp ../code/timer/*.cpp ../code/server/*.cpp \
-	../code/config/*.cpp ../code/main.cpp)
+	../code/config/*.cpp ../code/handler/*.cpp ../code/main.cpp)
 
-.PHONY: all clean config-test sql-test http-test log-test server-test
+.PHONY: all clean config-test sql-test http-test log-test server-test handler-test
 
 all: $(SOURCES)
 	mkdir -p "$(BIN_DIR)"
@@ -37,11 +37,15 @@ log-test:
 server-test:
 	$(MAKE) -C ../code/server/test test
 
+handler-test:
+	$(MAKE) -C ../code/handler/test test
+
 clean:
 	$(MAKE) -C ../code/config/test clean
 	$(MAKE) -C ../code/pool/test clean
 	$(MAKE) -C ../code/http/test clean
 	$(MAKE) -C ../code/log/test clean
 	$(MAKE) -C ../code/server/test clean
+	$(MAKE) -C ../code/handler/test clean
 	rm -rf "$(BIN_DIR)"
 	rm -rf ../log

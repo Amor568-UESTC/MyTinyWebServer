@@ -48,12 +48,16 @@
 # 项目中没有扩展名的可执行文件
 /code/config/test/configloaderTest
 /code/http/test/httpresponseTest
+/code/http/test/httprequestTest
+/code/http/test/httpconnProcessTest
 /code/http/test/sslcontextTest
 /code/http/test/httpsconnTest
 /code/log/test/logTest
 /code/pool/test/sqlconnpoolTest
 /code/pool/test/testThreadPool
 /code/server/test/serverStartupTest
+/code/handler/test/requesthandlerTest
+/code/handler/test/userserviceTest
 /webbench-1.5/webbench
 
 # CMake / Ninja / clangd 缓存

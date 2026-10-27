@@ -1,5 +1,6 @@
 #include "../sqlconnRAII.h"
 #include "../../http/httprequest.h"
+#include "../../handler/requesthandler.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -41,7 +42,9 @@ void LoginWithoutConnection() {
     buffer.Append(request);
     HttpRequest parser;
     Require(parser.parse(buffer) == HttpRequest::ParseRes::Complete, "login parsing failed");
-    Require(parser.path() == "/error.html", "missing connection did not produce a business failure");
+    Require(parser.path() == "/login", "parser rewrote the business route");
+    const RequestHandler handler;
+    Require(handler.Handle(parser).path == "/error.html", "missing connection did not produce a business failure");
 }
 }
 

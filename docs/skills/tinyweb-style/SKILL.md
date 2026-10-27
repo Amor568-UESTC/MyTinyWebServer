@@ -15,7 +15,7 @@ description: 在MyTinyWebServer仓库新增、修改或审查C++代码、TOML配
 
 ## 目录与文件组织
 
-- 代码按职责放在 `code/config`、`buffer`、`http`、`log`、`pool`、`server`、`timer` 等模块中,入口为 `code/main.cpp`.
+- 代码按职责放在 `code/config`、`buffer`、`http`、`handler`、`log`、`pool`、`server`、`timer` 等模块中,入口为 `code/main.cpp`.
 - 类声明通常放在 `.h`,实现放在对应 `.cpp`;模板及必要的内联实现可以保留在 `.h` 或 `.hpp`.
 - 文件名跟随模块已有习惯,如 `sqlconnpool.cpp`、`configloader.h`;保留 `sqlconnRAII.h`、`sslContext.cpp` 等现有大小写.
 - 模块说明沿用 `code/模块/readme.md`,测试说明放在对应 `test/readme.md`,实施计划和已知问题放在 `docs/`.
@@ -84,6 +84,6 @@ MYSQL* SqlConnPool::GetConn() {
 
 ## 修改后的验证
 
-- 按受影响模块选择现有入口: `make config-test`、`make sql-test`、`make http-test`、`make log-test`、`make server-test`,或进入模块的 `test/` 执行 `make test`.
+- 按受影响模块选择现有入口: `make config-test`、`make sql-test`、`make http-test`、`make log-test`、`make server-test`、`make handler-test`,或进入模块的 `test/` 执行 `make test`.
 - 服务器源码或构建逻辑变化时运行相应编译检查;纯注释和格式调整无需新增测试.
 - 提交前检查 `git diff --check`,确认修改范围以及测试产物的忽略规则.

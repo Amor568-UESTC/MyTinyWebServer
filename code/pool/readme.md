@@ -47,6 +47,8 @@
 
 ### SQL 连接池
 
+登录注册调用点已移到 [UserService](../handler/userservice.cpp),HTTP 解析器不再借用数据库连接.业务层使用参数化查询,连接池的借还和生命周期规则保持如下约定.
+
 更新日期：2026-10-24。实现见 [sqlconnpool.h](sqlconnpool.h)、[sqlconnpool.cpp](sqlconnpool.cpp) 和 [sqlconnRAII.h](sqlconnRAII.h)。
 
 当前采用“池空时返回失败”的策略：取得互斥锁后检查空闲队列，没有连接就返回 `nullptr`，不等待其他请求归还连接。调用者执行 SQL 时不持有连接池的锁，因此不同连接可以并行查询。

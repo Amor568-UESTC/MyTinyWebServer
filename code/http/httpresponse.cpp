@@ -1,7 +1,9 @@
 #include"httpresponse.h"
 
 #include <cerrno>
+#include <algorithm>
 #include <linux/openat2.h>
+#include <stdexcept>
 #include <sys/syscall.h>
 
 using namespace std;
@@ -58,7 +60,7 @@ void HttpResponse::AddStateLine_(Buffer& buff)
     buff.Append("HTTP/1.1 "+to_string(code_)+" "+status+"\r\n");
 }
 
-void HttpResponse::AddHeader_(Buffer& buff)
+void HttpResponse::AddHeader_(Buffer& buff, const string& contentType)
 {
     buff.Append("Connection: ");
     if(isKeepAlive_)
@@ -66,10 +68,7 @@ void HttpResponse::AddHeader_(Buffer& buff)
         buff.Append("keep-alive\r\n");
     }
     else buff.Append("close\r\n");
-    //暂时没有500的html页面
-    const string type = code_ >= 400 && !mmFile_ ?
-        "text/html; charset=utf-8" : GetFileType_();
-    buff.Append("Content-type: " + type + "\r\n");
+    buff.Append("Content-type: " + contentType + "\r\n");
 }
 
 int HttpResponse::OpenFile_() const {
@@ -150,7 +149,7 @@ HttpResponse::HttpResponse()
 
 HttpResponse::~HttpResponse() { UnmapFile();}
 
-void HttpResponse::Init(const std::string& srcDir,std::string& path,bool isKeepAlive,int code)
+void HttpResponse::Init(const string& srcDir, const string& path, bool isKeepAlive, int code)
 {
     assert(srcDir!="");
     UnmapFile(); //释放旧映射
@@ -163,6 +162,7 @@ void HttpResponse::Init(const std::string& srcDir,std::string& path,bool isKeepA
 
 void HttpResponse::MakeResponse(Buffer& buff)
 {
+    const int requestedCode = code_;
     int srcFd =OpenFile_();
     if (srcFd < 0) {
         switch (errno) {
@@ -186,6 +186,11 @@ void HttpResponse::MakeResponse(Buffer& buff)
         code_ = 403;
     } else if (code_ == -1) {
         code_ = 200;
+    }
+
+    //错误页面缺失时仍保留业务已经确定的错误状态
+    if (requestedCode >= 400) {
+        code_ = requestedCode;
     }
 
     //错误页面也通过OpenFile_()打开,不直接拼路径
@@ -212,12 +217,33 @@ void HttpResponse::MakeResponse(Buffer& buff)
     }
 
     AddStateLine_(buff);
-    AddHeader_(buff);
+    AddHeader_(buff, code_ >= 400 && !mmFile_ ? "text/html; charset=utf-8" : GetFileType_());
     if (fileReady) {
         buff.Append("Content-length: " + to_string(FileLen()) + "\r\n\r\n");
     } else {
         ErrorContent(buff, code_ == 500 ? "File mapping failed!" : "File unavailable!");
     }
+}
+
+void HttpResponse::MakeTextResponse(Buffer& buff, const string& body, const string& contentType,
+                                    bool isKeepAlive, int code)
+{
+    if (contentType.empty() || any_of(contentType.begin(), contentType.end(), [](unsigned char c) {
+            return c < 0x20 || c == 0x7f;
+        })) {
+        throw invalid_argument("Invalid response content type");
+    }
+    UnmapFile();
+    mmFileStat_ = {};
+    path_.clear();
+    srcDir_.clear();
+    code_ = code;
+    isKeepAlive_ = isKeepAlive;
+    AddStateLine_(buff);
+    AddHeader_(buff, contentType);
+    buff.Append("Content-length: " + to_string(body.size()) + "\r\n\r\n");
+    //正文复制到主程序缓冲区,发送时不再依赖业务结果对象
+    buff.Append(body);
 }
 
 void HttpResponse::UnmapFile()

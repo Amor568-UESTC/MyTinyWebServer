@@ -6,9 +6,9 @@ BIN_DIR ?= .
 TEST_PROGRAM := $(BIN_DIR)/serverStartupTest
 MAIN_OBJECT := $(BIN_DIR)/serverMain.o
 SOURCES := serverStartupTest.cpp $(wildcard ../*.cpp ../../buffer/*.cpp ../../config/*.cpp \
-	../../http/*.cpp ../../log/*.cpp ../../pool/*.cpp ../../timer/*.cpp)
+	../../handler/*.cpp ../../http/*.cpp ../../log/*.cpp ../../pool/*.cpp ../../timer/*.cpp)
 HEADERS := $(wildcard ../*.h ../../buffer/*.h ../../config/*.h ../../http/*.h \
-	../../log/*.h ../../log/*.hpp ../../pool/*.h ../../timer/*.h)
+	../../handler/*.h ../../log/*.h ../../log/*.hpp ../../pool/*.h ../../timer/*.h)
 WRAPS := mysql_server_init mysql_init mysql_real_connect mysql_error mysql_errno mysql_close \
 	socket setsockopt bind listen fcntl epoll_create1 epoll_ctl close
 

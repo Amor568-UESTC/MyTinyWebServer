@@ -1,6 +1,6 @@
 # HTTP / HTTPS 测试说明
 
-更新日期：2026-10-26。测试源码和独立 Makefile 放在本目录,默认产物也生成在本目录.当前 `httpsconnTest.cpp` 是早期接口实验程序，尚不能作为 HTTPS 回归或合入验收入口。已知问题与验证结果见 [修复清单](../../../docs/https-known-issues.md)。
+更新日期：2026-10-27。测试源码和独立 Makefile 放在本目录,默认产物也生成在本目录.当前 `httpsconnTest.cpp` 是早期接口实验程序，尚不能作为 HTTPS 回归或合入验收入口。已知问题与验证结果见 [修复清单](../../../docs/https-known-issues.md)。
 
 ## 文件响应回归
 
@@ -11,11 +11,17 @@ cd code/http/test
 make test
 ```
 
-如果已经位于本目录,直接执行 `make test`.单独 `make` 只编译,生成 `./httpresponseTest` 和 `./sslcontextTest`;`make clean` 清理这两个程序.项目根目录的 `make http-test` 会转发到本目录,也可以用 `BIN_DIR` 指定其他输出目录.新测试产物已加入 `.gitignore`,原有 `httpsconnTest` 二进制不由此 Makefile 覆盖或删除.
+如果已经位于本目录,直接执行 `make test`.单独 make 只编译,生成 httpresponseTest、httprequestTest、httpconnProcessTest 和 sslcontextTest;make clean 清理这四个程序.项目根目录的 `make http-test` 会转发到本目录,也可以用 BIN_DIR 指定其他输出目录.新测试产物已加入 .gitignore,原有 httpsconnTest 二进制不由此 Makefile 覆盖或删除.
 
 `httpresponseTest.cpp` 自动创建和清理临时站点，不依赖数据库、证书或运行中的服务器。通过链接器 `--wrap=mmap` 模拟 ENOMEM，仅影响测试二进制。任一检查失败返回非零退出码。
 
-当前 11 项回归覆盖普通文件、空文件、mmap 失败时的 500 与状态清理、图片请求失败后的 HTML 类型、失败后的下一次响应、映射的 404 页面、内联 404 回退、重复映射与最终释放,以及 Connection 关闭和固定 Keep-Alive 参数移除;同时检查响应长度、正文和 fd 数量.
+当前 17 项回归覆盖普通文件、空文件、mmap 失败时的 500 与状态清理、图片请求失败后的 HTML 类型、失败后的下一次响应、映射与内联 404、映射释放、Connection 行为,以及文本正文的所有权、含 NUL 字节的长度、空正文、Content-Type 校验、文件与文本切换和错误页缺失时的状态保留.
+
+## 请求解析与连接处理链
+
+httprequestTest 包含 24 项检查,不链接 MySQL 库,证明解析器已独立于数据库业务.覆盖 GET/POST 每个分段位置、连续请求、消息长度、非法头、表单解码和原始正文保留.解析 POST /login 不会执行验证或选择欢迎页.
+
+httpconnProcessTest 包含 8 项检查,只在内存中驱动真实 HttpConn::process(),没有创建网络连接.覆盖首页与版本接口、分段请求、文件和文本的连续切换、读关闭、非法表单 400 及资源目录约束.测试使用临时站点,不连接数据库.
 
 ## TLS 上下文与客户端证书验证
 
@@ -31,6 +37,7 @@ make test
 g++ -std=c++23 -pthread -g -O0 -Wall -Wextra \
   code/http/test/httpsconnTest.cpp \
   code/http/*.cpp \
+  code/handler/*.cpp \
   code/buffer/*.cpp \
   code/log/log.cpp \
   code/pool/sqlconnpool.cpp \

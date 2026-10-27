@@ -1,31 +1,22 @@
 #pragma once
 
-#include<unordered_map>
-#include<unordered_set>
-#include<string>
-#include<regex>
-#include<errno.h>
-#include<mysql/mysql.h>
+#include <string>
+#include <unordered_map>
 
-#include"../buffer/buffer.h"
-#include"../log/log.h"
-#include"../pool/sqlconnpool.h"
-#include"../pool/sqlconnRAII.h"
+#include "../buffer/buffer.h"
 
 class HttpRequest
 {
 public:
-    enum PARSE_STATE
-    {
+    enum PARSE_STATE {
         REQUEST_LINE,
         HEADERS,
         BODY,
         FINISH,
     };
 
-    enum HTTP_CODE
-    {
-        NO_REQUEST=0,
+    enum HTTP_CODE {
+        NO_REQUEST = 0,
         GET_REQUEST,
         BAD_REQUEST,
         NO_RESOURCE,
@@ -39,34 +30,24 @@ private:
     bool ParseRequestLine_(const std::string& line);
     bool ParseHeader_(const std::string& line);
     bool FinishHeadrs_();
-    void ParseBody_(const std::string& line);
-
-    void ParsePath_();
-    void ParsePost_();
-    void ParseFromUrlencoded_();
-
-    static bool UserVerify(const std::string& name,const std::string& pwd,bool isLogin);
+    bool ParseBody_(const std::string& body);
+    bool ParseFromUrlencoded_();
 
     PARSE_STATE state_;
     std::string method_;
     std::string path_;
     std::string version_;
     std::string body_;
-    std::unordered_map<std::string,std::string> header_;
-    std::unordered_map<std::string,std::string> post_;
+    std::unordered_map<std::string, std::string> header_;
+    std::unordered_map<std::string, std::string> post_;
     std::size_t contentLength_ = 0;
 
-    static const std::unordered_set<std::string> DEFAULT_HTML;
-    static const std::unordered_map<std::string,int> DEFAULT_HTML_TAG;
-    static int ConverHex(char ch);
-    
 public:
-    HttpRequest(){Init();}
-    ~HttpRequest()=default;
+    HttpRequest() { Init(); }
+    ~HttpRequest() = default;
 
     void Init();
 
-    //定义更多解析结果
     enum class ParseRes {
         NeedMore,
         Complete,
@@ -78,7 +59,9 @@ public:
     std::string& path();
     std::string method() const;
     std::string version() const;
+    const std::string& body() const { return body_; }
     std::string GetPost(const std::string& key) const;
     std::string GetPost(const char* key) const;
+    bool IsFormUrlencoded() const;
     bool IsKeepAlive() const;
 };
