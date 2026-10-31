@@ -8,7 +8,7 @@ BIN_DIR ?= ../bin
 # 头文件由 #include 引入，不作为独立编译输入。
 SOURCES := $(wildcard ../code/buffer/*.cpp ../code/pool/*.cpp ../code/log/*.cpp \
 	../code/http/*.cpp ../code/timer/*.cpp ../code/server/*.cpp \
-	../code/config/*.cpp ../code/handler/*.cpp ../code/main.cpp)
+	../code/config/*.cpp ../code/handler/*.cpp ../code/plugin/*.cpp ../code/main.cpp)
 
 .PHONY: all clean config-test sql-test http-test log-test server-test handler-test plugin-test
 
@@ -19,7 +19,7 @@ all: $(SOURCES)
 	buildTmpDir=$$(mktemp -d "$(BIN_DIR)/.$(TARGET).XXXXXX"); \
 	trap 'rm -rf -- "$$buildTmpDir"' EXIT; \
 	$(CXX) $(CPPFLAGS) $(CFLAGS) $(SOURCES) -o "$$buildTmpDir/$(TARGET)" \
-		-pthread -lmysqlclient -lssl -lcrypto $(TOML_LIBS); \
+		-pthread -lmysqlclient -lssl -lcrypto -ldl $(TOML_LIBS); \
 	mv -f -- "$$buildTmpDir/$(TARGET)" "$(BIN_DIR)/$(TARGET)"
 
 config-test:

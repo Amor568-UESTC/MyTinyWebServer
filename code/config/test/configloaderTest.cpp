@@ -68,6 +68,9 @@ public:
         std::filesystem::create_directories(root / "config/rss");
         std::filesystem::create_directories(root / "site");
         std::filesystem::create_directories(root / "tls");
+        std::filesystem::create_directories(root / "plugins");
+        //这里只验证文件类型,动态库内容由Module负责校验
+        std::ofstream(root / "plugins/business.so") << "plugin path fixture";
         // The loader checks file types only; these are not real certificates or keys.
         std::ofstream(root / "tls/server.crt") << "certificate fixture";
         std::ofstream(root / "tls/server.key") << "key fixture";
@@ -188,6 +191,7 @@ int main() {
             Require(!config.tls.requireClientCertificate, "client certificate default");
             Require(config.logging.enabled && config.logging.level == 2, "logging enabled or level");
             Require(config.logging.asyncQueueSize == 16, "asyncQueueSize");
+            Require(!config.plugin.enabled && config.plugin.path.empty(), "plugin defaults");
         });
 
         runner.Run("missing optional fields use defaults", [&] {
@@ -292,7 +296,40 @@ name = "testdb"
             Require(relative.tls.privateKey == absolute.tls.privateKey, "TLS path changed with cwd");
         });
 
+        const auto pluginConfig = validConfig + "\n[plugin]\nenabled = true\npath = '../plugins/business.so'\n";
+        runner.Run("plugin path is resolved from the config directory", [&] {
+            const auto config = LoadConfig(fixture.Write(pluginConfig));
+            Require(config.plugin.enabled && config.plugin.path == (fixture.root / "plugins/business.so").string(),
+                    "plugin path or enabled flag");
+        });
+        runner.Run("absolute plugin path", [&] {
+            const auto text = Replace(pluginConfig, "../plugins/business.so",
+                                      (fixture.root / "plugins/business.so").string());
+            Require(LoadConfig(fixture.Write(text)).plugin.path == (fixture.root / "plugins/business.so").string(),
+                    "absolute plugin path");
+        });
+        runner.Run("plugin path works from another working directory", [&] {
+            const auto file = fixture.Write(pluginConfig);
+            ScopedDirectory directory(fixture.root);
+            Require(LoadConfig(file).plugin.path == (fixture.root / "plugins/business.so").string(),
+                    "plugin path changed with cwd");
+        });
+        runner.Run("disabled plugin permits a missing file", [&] {
+            const auto text = validConfig + "\n[plugin]\nenabled = false\npath = '../missing.so'\n";
+            const auto config = LoadConfig(fixture.Write(text));
+            Require(!config.plugin.enabled && config.plugin.path == (fixture.root / "missing.so").string(),
+                    "disabled plugin path");
+        });
+
         const std::vector<InvalidCase> cases = {
+            {"plugin section type", "plugin = 3\n" + validConfig, "plugin"},
+            {"plugin enabled type", validConfig + "\n[plugin]\nenabled = 'true'\n", "plugin.enabled"},
+            {"plugin path type", validConfig + "\n[plugin]\npath = 123\n", "plugin.path"},
+            {"plugin unknown field", validConfig + "\n[plugin]\nunknown = true\n", "plugin.unknown"},
+            {"enabled plugin without path", validConfig + "\n[plugin]\nenabled = true\n", "plugin.path"},
+            {"plugin file missing", Replace(pluginConfig, "business.so", "missing.so"), "plugin.path"},
+            {"plugin path is directory", Replace(pluginConfig, "../plugins/business.so", "../plugins"), "plugin.path"},
+            {"NUL plugin path", validConfig + "\n[plugin]\npath = \"bad\\u0000path\"\n", "plugin.path"},
             {"integer string", Replace(validConfig, "port = 9443", "port = \"9443\""), "server.port"},
             {"integer float", Replace(validConfig, "port = 9443", "port = 9443.0"), "server.port"},
             {"integer boolean", Replace(validConfig, "port = 9443", "port = true"), "server.port"},

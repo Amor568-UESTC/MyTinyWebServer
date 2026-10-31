@@ -1,8 +1,10 @@
 # 服务器模块
 
-更新日期：2026-10-24。`main()` 通过 `LoadConfig()` 读取并校验 TOML，再把拥有字符串存储的 `ServerConfig` 移入 `WebServer`。具体字段、启动命令与测试入口见 [配置化指南](../../docs/config-and-hot-reload-guide.md)。
+更新日期：2026-11-01。`main()` 通过 `LoadConfig()` 读取并校验 TOML，再把拥有字符串存储的 `ServerConfig` 移入 `WebServer`。具体字段、启动命令与测试入口见 [配置化指南](../../docs/config-and-hot-reload-guide.md)。
 
-端口、ET/LT 模式、超时、资源路径、线程数、数据库和 TLS 参数已接入.主线程先初始化 MySQL 库,再初始化日志、连接数据库、准备 TLS 和监听,最后创建工作线程.启动失败通过 main 输出 stderr 并返回 1,构造失败时回收监听 fd 和已建立的空闲数据库连接.日志阈值、队列容量和独立客户端证书开关已生效.连接与工作线程的关闭协调继续暂缓.
+端口、ET/LT 模式、超时、资源路径、线程数、数据库、TLS 和插件参数已接入.主线程先初始化 MySQL 库,再初始化日志、连接数据库、准备 TLS 和可选插件,然后创建监听,最后创建工作线程.启动失败通过 main 输出 stderr 并返回 1,构造失败时回收监听 fd、数据库连接和已加载的插件.日志阈值、队列容量和独立客户端证书开关已生效.连接与工作线程的关闭协调继续暂缓.
+
+启用插件时 WebServer 持有 shared_ptr<Module>,AddClient_ 在投递工作任务前复制到 HttpConn.当前所有连接固定使用启动时选择的插件,GET /api/version 由 RequestHandler 调用插件;其他页面和登录注册沿用原路径.阶段七会改为每次业务分派取得当前模块快照.
 
 初始化失败回归位于 [test/](test/readme.md),本目录测试使用真实 main 和注入的 MySQL/网络失败,项目根目录执行 `make server-test`.
 

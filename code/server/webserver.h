@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <memory>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
@@ -18,6 +19,7 @@
 #include "../http/sslContext.h"
 #include "../config/serverconfig.h"
 
+class Module;
 
 class WebServer
 {
@@ -54,6 +56,7 @@ private:
     uint32_t listenEvent_;
     uint32_t connEvent_;
 
+    std::shared_ptr<Module> businessModule_;
     std::unique_ptr<HeapTimer> timer_;
     std::unique_ptr<ThreadPool> threadpool_;
     std::unique_ptr<Epoller> epoller_;

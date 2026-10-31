@@ -1,6 +1,6 @@
 # HTTP / HTTPS 测试说明
 
-更新日期：2026-10-27。测试源码和独立 Makefile 放在本目录,默认产物也生成在本目录.当前 `httpsconnTest.cpp` 是早期接口实验程序，尚不能作为 HTTPS 回归或合入验收入口。已知问题与验证结果见 [修复清单](../../../docs/https-known-issues.md)。
+更新日期：2026-11-01。测试源码和独立 Makefile 放在本目录,默认产物也生成在本目录.当前 `httpsconnTest.cpp` 是早期接口实验程序，尚不能作为 HTTPS 回归或合入验收入口。已知问题与验证结果见 [修复清单](../../../docs/https-known-issues.md)。
 
 ## 文件响应回归
 
@@ -21,7 +21,7 @@ make test
 
 httprequestTest 包含 24 项检查,不链接 MySQL 库,证明解析器已独立于数据库业务.覆盖 GET/POST 每个分段位置、连续请求、消息长度、非法头、表单解码和原始正文保留.解析 POST /login 不会执行验证或选择欢迎页.
 
-httpconnProcessTest 包含 8 项检查,只在内存中驱动真实 HttpConn::process(),没有创建网络连接.覆盖首页与版本接口、分段请求、文件和文本的连续切换、读关闭、非法表单 400 及资源目录约束.测试使用临时站点,不连接数据库.
+httpconnProcessTest 包含 13 项检查,在内存中驱动真实 HttpConn::process(),没有创建网络连接.覆盖首页与版本接口、分段请求、文件和文本的连续切换、读关闭、非法表单 400 及资源目录约束,并真实加载测试插件验证 v2 正文、连接持有模块、文件与插件流水线、500 后的下一请求、含 NUL 正文长度和 HttpsConn 复用业务分派.HTTPS 这一项只验证继承的请求处理链,不执行 TLS 握手或网络收发.测试使用临时站点和本目录 plugin-fixtures/,不连接数据库.
 
 ## TLS 上下文与客户端证书验证
 
@@ -38,11 +38,12 @@ g++ -std=c++23 -pthread -g -O0 -Wall -Wextra \
   code/http/test/httpsconnTest.cpp \
   code/http/*.cpp \
   code/handler/*.cpp \
+  code/plugin/*.cpp \
   code/buffer/*.cpp \
   code/log/log.cpp \
   code/pool/sqlconnpool.cpp \
   -o /tmp/tinyweb-httpsconn-test \
-  -lmysqlclient -lssl -lcrypto
+  -lmysqlclient -lssl -lcrypto -ldl
 ```
 
 产物放在 `/tmp`，避免覆盖仓库中仍被跟踪的旧二进制。旧的 C++17 命令不适用于当前源码中的 `unordered_map::contains()` 等调用。

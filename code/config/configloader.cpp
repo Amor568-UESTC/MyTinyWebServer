@@ -187,6 +187,10 @@ void Validate(const ServerConfig& config) {
         Fail("logging.asyncQueueSize", "must be nonnegative");
     }
 
+    if (config.plugin.enabled) {
+        RequireRegularFile(config.plugin.path, "plugin.path");
+    }
+
     const auto& tls = config.tls;
     if (tls.enabled) {
         if (tls.requireClientCertificate && tls.clientCaFile.empty()) {
@@ -210,18 +214,20 @@ ServerConfig LoadConfig(const filesystem::path& path) {
     const auto configFile = filesystem::absolute(path);
     try {
         const toml::table root = toml::parse_file(configFile.string());
-        CheckKeys(root, "", {"server", "database", "tls", "logging"});
+        CheckKeys(root, "", {"server", "database", "tls", "logging", "plugin"});
 
         const auto& server = Section(root, "server");
         const auto& db = Section(root, "database");
         const auto& tls = Section(root, "tls");
         const auto& logging = Section(root, "logging");
+        const auto& plugin = Section(root, "plugin");
         CheckKeys(server, "server", {"port", "listenMode", "connectionMode", "idleTimeoutMs",
                                     "linger", "workerThreads", "documentRoot"});
         CheckKeys(db, "database", {"host", "port", "user", "password", "passwordEnv", "name", "poolSize"});
         CheckKeys(tls, "tls", {"enabled", "certificate", "privateKey", "clientCaFile",
                                "requireClientCertificate"});
         CheckKeys(logging, "logging", {"enabled", "level", "asyncQueueSize"});
+        CheckKeys(plugin, "plugin", {"enabled", "path"});
 
         ServerConfig config;
         config.server.port = ReadInteger(server, "port", config.server.port, "server.port");
@@ -254,11 +260,15 @@ ServerConfig LoadConfig(const filesystem::path& path) {
         config.logging.asyncQueueSize = ReadInteger(logging, "asyncQueueSize", config.logging.asyncQueueSize,
                                                    "logging.asyncQueueSize");
 
+        config.plugin.enabled = ReadOptional(plugin, "enabled", config.plugin.enabled, "plugin.enabled");
+        config.plugin.path = ReadOptional(plugin, "path", config.plugin.path, "plugin.path");
+
         const auto base = configFile.parent_path();
         ResolvePath(config.server.documentRoot, base, "server.documentRoot");
         ResolvePath(config.tls.certificate, base, "tls.certificate");
         ResolvePath(config.tls.privateKey, base, "tls.privateKey");
         ResolvePath(config.tls.clientCaFile, base, "tls.clientCaFile");
+        ResolvePath(config.plugin.path, base, "plugin.path");
         Validate(config);
         return config;
     } catch (const toml::parse_error& error) {

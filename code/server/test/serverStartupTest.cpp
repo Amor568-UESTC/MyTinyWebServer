@@ -24,6 +24,7 @@ int listener = -1;
 int listenerCloses = 0;
 int connectionAttempts = 0;
 bool loggingEnabled = false;
+filesystem::path pluginDirectory;
 
 void Require(bool condition, const char* message) {
     if (!condition) {
@@ -48,6 +49,21 @@ struct Fixture {
         filesystem::create_directory("site");
         ofstream("server.crt") << "invalid test certificate";
         ofstream("server.key") << "invalid test key";
+        if (scenario.starts_with("plugin_")) {
+            if (scenario == "plugin_invalid_file") {
+                ofstream("plugin.so") << "invalid shared library";
+            } else if (scenario != "plugin_missing_file") {
+                string name = "valid";
+                if (scenario == "plugin_bad_abi") {
+                    name = "badAbi";
+                } else if (scenario == "plugin_create_failure") {
+                    name = "createFailure";
+                }
+                filesystem::copy_file(pluginDirectory / (name + ".so"), "plugin.so");
+            }
+            Require(setenv("TINYWEB_PLUGIN_TEST_TRACE", (root / "lifecycle.log").c_str(), 1) == 0,
+                    "cannot set plugin trace path");
+        }
         if (scenario == "log_failure") {
             ofstream("log") << "not a directory";
         }
@@ -58,6 +74,9 @@ struct Fixture {
                << "\nlevel = 1\nasyncQueueSize = 2\n"
                << "[tls]\nenabled = " << (scenario == "tls_failure" ? "true" : "false")
                << "\ncertificate = 'server.crt'\nprivateKey = 'server.key'\n";
+        if (scenario.starts_with("plugin_")) {
+            config << "[plugin]\nenabled = true\npath = 'plugin.so'\n";
+        }
     }
 
     ~Fixture() {
@@ -177,8 +196,13 @@ int main(int argc, char* argv[]) {
         {"listen_failure", "listen failed"},
         {"epoll_failure", "epoll_ctl(ADD listener) failed"},
         {"epoll_create_failure", "epoll_create1 failed"},
+        {"plugin_missing_file", "plugin.path"},
+        {"plugin_invalid_file", "dlopen failed"},
+        {"plugin_bad_abi", "Plugin ABI version or structure size mismatch"},
+        {"plugin_create_failure", "Plugin create failed"},
+        {"plugin_before_listen", "epoll_ctl(ADD listener) failed"},
     };
-    if (argc != 2) {
+    if (argc != 2 && argc != 3) {
         return 2;
     }
     scenario = argv[1];
@@ -189,6 +213,9 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     try {
+        if (argc == 3) {
+            pluginDirectory = filesystem::absolute(argv[2]);
+        }
         const auto selected = find_if(cases.begin(), cases.end(), [](const auto& item) {
             return item.first == scenario;
         });
@@ -215,6 +242,24 @@ int main(int argc, char* argv[]) {
         }
         if (scenario == "tls_failure" || scenario.starts_with("database") || scenario == "library_failure") {
             Require(socketCalls == 0, "startup continued to listening after a dependency failure");
+        }
+        if (scenario.starts_with("plugin_")) {
+            ifstream trace(fixture.root / "lifecycle.log", ios::binary);
+            const string events(istreambuf_iterator<char>(trace), {});
+            string expected;
+            if (scenario == "plugin_bad_abi") {
+                expected = "U";
+            } else if (scenario == "plugin_create_failure") {
+                expected = "CU";
+            } else if (scenario == "plugin_before_listen") {
+                expected = "CDU";
+            }
+            Require(events == expected, "plugin startup resources were not released in order");
+            Require(socketCalls == (scenario == "plugin_before_listen" ? 1 : 0),
+                    "listener was opened before the plugin was usable");
+            if (scenario == "plugin_missing_file") {
+                Require(connectionAttempts == 0, "invalid plugin path reached database initialization");
+            }
         }
         cout << "PASS " << scenario << '\n';
         return 0;

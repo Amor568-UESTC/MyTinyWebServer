@@ -1,5 +1,7 @@
 #include "webserver.h"
 
+#include "../plugin/module.h"
+
 #include <utility>
 #include <stdexcept>
 #include <system_error>
@@ -81,6 +83,7 @@ void WebServer::AddClient_(int fd, sockaddr_in addr)
     }
 
     auto* client = user_[fd].get();
+    client->SetBusinessModule(businessModule_);
     client->Init(fd, addr);
 
     if (config_.tls.enabled) {
@@ -366,6 +369,11 @@ WebServer::WebServer(ServerConfig config)
             tls.clientCaFile.empty() ? nullptr : tls.clientCaFile.c_str(),
             tls.requireClientCertificate)) {
             throw runtime_error("TLS initialization failed: " + SSLContext::GetInstance().GetLastError());
+        }
+
+        if (config_.plugin.enabled) {
+            businessModule_ = Module::Load(config_.plugin.path);
+            LOG_INFO("Business plugin loaded: %s", config_.plugin.path.c_str());
         }
 
         InitEventMode_(config_.server.listenMode, config_.server.connectionMode);

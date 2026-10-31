@@ -6,10 +6,14 @@
 #include<stdlib.h>
 #include<errno.h>
 
+#include <memory>
+
 #include"../log/log.h"
 #include"../buffer/iobuffer.h"
 #include"httprequest.h"
 #include"httpresponse.h"
+
+class Module;
 
 class HttpConn
 {
@@ -21,6 +25,7 @@ private:
 
     HttpRequest request_;
     HttpResponse response_;
+    std::shared_ptr<Module> businessModule_;
 
     //增加一个标志位，表示请求是否已经完成解析
     bool requestDone_ = false;
@@ -49,6 +54,9 @@ public:
     sockaddr_in GetAddr() const;
 
     bool process();
+
+    //只在连接发布给工作线程之前设置,运行中固定使用启动版本
+    void SetBusinessModule(std::shared_ptr<Module> module);
 
     size_t ToWriteBytes() {return iov_[0].iov_len+iov_[1].iov_len;}
     bool IsKeepAlive() const { return keepAlive_; } //使用自己的变量来判断

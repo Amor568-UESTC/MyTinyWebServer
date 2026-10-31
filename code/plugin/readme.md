@@ -1,8 +1,20 @@
 # 插件加载模块
 
-最近同步:2026-10-30.
+最近同步:2026-11-01.
 
-本模块已实现独立业务插件的加载和调用,尚未接入 WebServer、配置和 HTTP 请求分派.运行期间版本切换仍待后续实现.
+本模块已接入 WebServer 启动配置和 GET /api/version 路由.运行期间版本切换仍待后续实现.
+
+在本地 config/server.toml 中配置:
+
+```toml
+[plugin]
+enabled = true
+path = "../plugins/business.v1.so"
+```
+
+相对路径以 TOML 文件所在目录为基准.默认禁用,禁用时保留主程序内置版本文本;启用后在创建监听和工作线程之前加载,失败返回非零退出码.每个连接持有启动时的模块引用,HTTP 和 HTTPS 使用同一业务分派路径.
+
+主程序仅把 GET /api/version 交给插件.插件调用失败时返回公开的 HTTP 500 文本,原因记录在日志中.页面文件和登录注册继续由原业务层处理.接口自身不访问数据库,但服务器正常启动仍需要有效的数据库配置.
 
 | 文件 | 职责 |
 | --- | --- |
@@ -71,4 +83,4 @@ g++ -std=c++23 -O2 -Wall -Wextra -fPIC -shared -fvisibility=hidden \
 
 ## 验证
 
-根目录执行 `make plugin-test`,或进入 [test/](test/readme.md) 执行 `make test`.当前包含 26 项模块回归,并运行独立加载程序.现有服务器请求仍走静态业务层,服务器接入步骤见 [实践指南](../../docs/plugin-startup-guide.md).
+根目录执行 `make plugin-test`,或进入 [test/](test/readme.md) 执行 `make test`.当前包含 26 项模块回归,并运行独立加载程序.配置、路由、连接处理链和启动失败回归分别由对应模块的 test 目录覆盖,接入位置见 [实践指南](../../docs/plugin-startup-guide.md).

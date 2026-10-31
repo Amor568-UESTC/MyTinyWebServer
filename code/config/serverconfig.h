@@ -40,9 +40,15 @@ struct LoggingConfig {
     int asyncQueueSize = 1024;
 };
 
+struct PluginConfig {
+    bool enabled = false;
+    std::string path;
+};
+
 struct ServerConfig {
     ServerOptions server;
     DatabaseConfig database;
     TlsConfig tls;
     LoggingConfig logging;
+    PluginConfig plugin;
 };

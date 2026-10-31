@@ -5,8 +5,8 @@ CFLAGS = -std=c++23 -O2 -Wall -g
 BIN_DIR ?= .
 TEST_PROGRAM := $(BIN_DIR)/sqlconnpoolTest
 SOURCES := sqlconnpoolTest.cpp ../sqlconnpool.cpp ../../http/httprequest.cpp $(wildcard ../../handler/*.cpp) \
-	../../buffer/buffer.cpp ../../log/log.cpp
-HEADERS := $(wildcard ../*.h ../../handler/*.h ../../http/*.h ../../buffer/*.h ../../log/*.h ../../log/*.hpp)
+	../../buffer/buffer.cpp ../../log/log.cpp ../../plugin/module.cpp
+HEADERS := $(wildcard ../*.h ../../handler/*.h ../../http/*.h ../../buffer/*.h ../../log/*.h ../../log/*.hpp ../../plugin/*.h)
 MYSQL_WRAPS := -Wl,--wrap=mysql_server_init -Wl,--wrap=mysql_init \
 	-Wl,--wrap=mysql_real_connect -Wl,--wrap=mysql_error \
 	-Wl,--wrap=mysql_errno -Wl,--wrap=mysql_close \
@@ -19,7 +19,7 @@ all: $(TEST_PROGRAM)
 
 $(TEST_PROGRAM): $(SOURCES) $(HEADERS) Makefile
 	mkdir -p "$(BIN_DIR)"
-	$(CXX) $(CPPFLAGS) $(CFLAGS) -pthread $(SOURCES) -o "$@" -lmysqlclient $(MYSQL_WRAPS)
+	$(CXX) $(CPPFLAGS) $(CFLAGS) -pthread $(SOURCES) -o "$@" -lmysqlclient -ldl $(MYSQL_WRAPS)
 
 test: $(TEST_PROGRAM)
 	@set -e; \

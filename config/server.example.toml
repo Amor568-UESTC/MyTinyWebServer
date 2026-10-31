@@ -31,3 +31,8 @@ requireClientCertificate = false
 enabled = true
 level = 1
 asyncQueueSize = 1024
+
+#相对路径以本配置文件所在目录为基准,启用前先独立编译插件
+[plugin]
+enabled = false
+path = "../plugins/business.v1.so"

@@ -1,15 +1,15 @@
 # 配置化与 .so 热更新实践指南
 
-首次记录：2026-10-20。最近同步：2026-10-30。本文同时记录当前实现和后续实施路线，尚未实现的部分在各阶段单独标明。
+首次记录：2026-10-20。最近同步：2026-11-01。本文同时记录当前实现和后续实施路线，尚未实现的部分在各阶段单独标明。
 
 | 阶段 | 当前状态 |
 | --- | --- |
 | 一：配置结构 | 已接入，`WebServer` 持有 `const ServerConfig`，替代位置参数和重复配置成员 |
-| 二：TOML Loader | 已实现读取、严格校验、路径解析和 `--config`；连同环境变量功能，仓库内 59 项 Loader 回归通过 |
+| 二：TOML Loader | 已实现读取、严格校验、路径解析和 `--config`；连同环境变量及插件配置,仓库内 71 项 Loader 回归 |
 | 三：环境变量与可选 `.env` | 进程环境变量读取已实现，TOML 的 `password` 与 `passwordEnv` 互斥；`.env` 文件读取待实现 |
 | 四：模块行为与初始化 | 日志配置、启动失败回收与退出码、TLS 客户端验证开关和响应头已接入并有自动回归；真实服务与数据库业务仍待验收 |
 | 五：业务拆分 | 已接入 handler、文本响应和 GET /api/version,解析器不再访问数据库;自动回归通过 |
-| 六：插件加载 | 共享接口、示例插件和 Module 已实现,26 项独立回归通过;服务器配置和请求链接入待完成 |
+| 六：插件加载 | 共享接口、Module、启动配置和 GET /api/version 分派已接入,含错误回收和 500 响应回归;真实服务手动验收仍待完成 |
 | 七～八：运行中版本切换 | 待实现,下面的快照、重载与触发流程仍属于实施计划 |
 
 配置结构、TOML Loader 和环境变量密码已接入。本轮补齐日志与启动失败处理,并分离客户端 CA 与强制客户端证书开关.测试覆盖配置、模拟数据库、日志、真实内存 TLS 握手和注入的启动失败路径;真实数据库登录注册及完整 HTTP/HTTPS 服务仍需手动验收.
@@ -39,8 +39,9 @@
 | 数据库 | `database.host`、`port`、`user`、`password`、`passwordEnv`、`name`、`poolSize` | `password` 与 `passwordEnv` 互斥,失败时回滚并向 main 上报;用户和库名必须非空 |
 | TLS | `tls.enabled`、`certificate`、`privateKey`、`clientCaFile`、`requireClientCertificate` | CA 只指定信任源,独立开关控制强制客户端验证;开启验证必须提供 CA |
 | 日志 | `logging.enabled`、`level`、`asyncQueueSize` | 最低输出级别与队列容量生效,0 表示同步;目录固定为 ./log,轮转行数固定为 50000 |
+| 插件 | `plugin.enabled`、`path` | 默认禁用;启用时路径必须为文件,以 TOML 目录为基准,在监听和工作线程创建前加载 |
 
-字段采用驼峰命名，并且区分大小写；同一行未重复的分组前缀与首字段一致。未来可增加 `server.address`、`listenBacklog`、`maxConnections`、`logging.directory`、`rotateLines` 和 `plugin.path`。这些字段当前都会被未知字段检查拒绝，不能直接写入本机配置。
+字段采用驼峰命名，并且区分大小写；同一行未重复的分组前缀与首字段一致。未来可增加 `server.address`、`listenBacklog`、`maxConnections`、`logging.directory` 和 `rotateLines`。这些字段当前都会被未知字段检查拒绝，不能直接写入本机配置。
 
 以下参数以后可以补，但必须同时实现对应行为：请求头与请求体大小上限、每条连接的请求数上限、握手超时、日志控制台输出。不能只添加配置项就宣称能力已经存在。
 
@@ -184,7 +185,7 @@ bin/server --config config/server.toml
 make config-test
 ```
 
-[configloaderTest.cpp](../code/config/test/configloaderTest.cpp) 自动准备和清理临时目录，不依赖 MySQL 服务或真实证书。59 项检查覆盖字段与默认值、类型和数值范围、未知字段、模式、路径基准、文件类型、NUL、TOML 语法及缺失文件，也覆盖环境变量密码、值的复制和特殊字符、缺失及空值、来源冲突和错误信息不输出密码。测试中的证书文件只是类型检查占位文件，不证明 TLS 内容有效。
+[configloaderTest.cpp](../code/config/test/configloaderTest.cpp) 自动准备和清理临时目录，不依赖 MySQL 服务或真实证书。71 项检查覆盖字段与默认值、类型和数值范围、未知字段、模式、路径基准、文件类型、NUL、TOML 语法及缺失文件，也覆盖环境变量密码、来源冲突、插件配置和错误信息不输出密码。证书和插件文件只是类型检查占位文件,不证明其内容有效。
 
 测试的独立 Makefile 和说明位于 [code/config/test/](../code/config/test/readme.md).可以进入该目录执行 `make test`,默认程序也生成在该目录;根目录命令只负责转发.其他新增回归同样按 `code/<模块>/test/` 组织,不把测试编译规则集中到服务器的 build/Makefile 中.
 
@@ -352,7 +353,9 @@ GET `/api/version` 返回 `TinyWebServer v1\n`,类型为 text/plain; charset=utf
 
 ## 8. 阶段六：定义插件 ABI，先实现启动加载
 
-详细操作见 [.so 启动加载分步实践](plugin-startup-guide.md).共享头、插件、Module 和独立加载程序已实现,26 项模块回归通过;服务器配置和请求链接入仍待完成.当前可运行 `make plugin-test`,不需要启动服务器或连接数据库.
+详细操作见 [.so 启动加载分步实践](plugin-startup-guide.md).共享头、插件、Module、启动配置和 GET /api/version 请求分派已接入.默认禁用插件,启用后由 WebServer 持有模块并在创建连接时复制共享引用.运行期间版本保持固定,请求失败返回 500.PluginManager 留到阶段七引入.
+
+现有七个测试入口合计 243 项检查.新增配置、路由、内存连接处理链和启动失败回归验证插件接入;这些检查不启动网络监听,不替代用户环境中的完整 HTTP/HTTPS 与真实数据库验收.
 
 ### 建议文件
 
@@ -361,7 +364,7 @@ GET `/api/version` 返回 `TinyWebServer v1\n`,类型为 text/plain; charset=utf
 - `code/plugin/pluginmanager.h/.cpp`：加载与当前版本管理。
 - `plugins/business.cpp`：首个插件实现，与主程序分开构建。
 
-第一版先在启动时加载一个插件，运行期间不切换，确认调用链和资源所有权正确。
+第一版已在启动时加载一个插件，运行期间不切换。配置和调用链说明见 [plugin 模块](../code/plugin/readme.md),独立模块保留 26 项回归.
 
 ### 接口示意
 
@@ -438,10 +441,11 @@ g++ -std=c++23 -O2 -fPIC -shared -fvisibility=hidden \
 
 ### 验收
 
-- [ ] 正确插件可被加载，`/api/version` 能返回 v1。
-- [ ] 缺少文件、缺少入口、错误 ABI、初始化失败都有明确错误，且不会泄漏成功打开的句柄。
-- [ ] 停止使用插件后，实例先销毁，再关闭库句柄。
-- [ ] 插件返回的正文已复制进主程序存储，发送时不依赖插件的临时字符串。
+- [x] 正确插件可被加载,内存 HTTP/HTTPS 请求处理链返回测试插件的 v2 正文,证明使用了动态库实现。
+- [x] 缺少文件、缺少入口、错误 ABI、初始化失败都有明确错误,自动回归覆盖句柄与实例回收。
+- [x] 停止使用插件后,实例先销毁,再关闭库句柄。
+- [x] 插件正文已复制进主程序存储,并验证二进制长度、共享持有和失败时的 500 响应。
+- [ ] 用户环境中的真实 HTTP/HTTPS 端口访问和有效数据库账号手动验收。
 
 ## 9. 阶段七：实现版本切换和旧版本延迟释放
 
@@ -570,7 +574,7 @@ feat(config): load and validate server settings from TOML
 7. `feat(plugin): switch module versions while retaining active handlers`：版本快照与延迟释放。
 8. `feat(server): trigger plugin reload through signalfd`：明确的重载触发。
 
-阶段一至五的代码接入与自动回归已完成,可保存业务拆分提交,下一步是阶段六的插件 ABI 和启动加载.真实账号下的页面和登录注册验收仍需补充;`.env` 文件读取按需要增加,运行中关闭协调继续单独安排.
+阶段一至六的代码与自动回归已接入,下一步是阶段七的当前版本快照和安全切换.真实端口访问、有效账号下的页面和登录注册验收仍需补充;`.env` 文件读取按需要增加,运行中关闭协调继续单独安排.
 
 提交前执行 `make config-test`、完整构建和 `git diff HEAD --check`，并检查暂存区内容。仓库保留 `.vscode/c_cpp_properties.json` 和 `settings.json` 这两份共享配置，其他 VS Code 本地配置忽略；本机 TOML、`.env`、私钥、日志和构建产物不提交。
 

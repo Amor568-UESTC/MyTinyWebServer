@@ -13,7 +13,7 @@ enum class FixtureMode {
     valid, nullApi, badAbi, badSize, missingCreate, missingHandle, missingDestroy,
     createFailure, nullInstance, partialCreateFailure, handleFailure,
     oversizedBody, ignoredAppendFailure, invalidBody, ignoredInvalidBody,
-    emptyBody, binaryBody, exactLimit, chunkedBody
+    emptyBody, binaryBody, exactLimit, chunkedBody, versionTwo
 };
 
 #ifndef FIXTURE_MODE
@@ -76,6 +76,9 @@ __attribute__((destructor)) void OnUnload() {
     }
     if (mode == FixtureMode::binaryBody) {
         return writer->append(writer->user, "A\0B", 3);
+    }
+    if (mode == FixtureMode::versionTwo) {
+        return writer->append(writer->user, "TinyWebServer v2\n", 17);
     }
     if (mode == FixtureMode::exactLimit) {
         char chunk[1024];

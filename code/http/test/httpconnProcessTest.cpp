@@ -1,4 +1,6 @@
 #include "../httpconn.h"
+#include "../httpsconn.h"
+#include "../../plugin/module.h"
 
 #include <filesystem>
 #include <fstream>
@@ -60,6 +62,14 @@ public:
     }
 };
 
+class SecureConnection : public HttpsConn {
+public:
+    void Feed(const string& wire) { readBuff_.Append(wire); }
+    string TakeResponse() const {
+        return string(writeBuff_.Peek(), writeBuff_.ReadableBytes());
+    }
+};
+
 void CheckResponse(const string& wire, int status, const string& body) {
     const auto end = wire.find("\r\n\r\n");
     const auto length = wire.find("Content-length: ");
@@ -74,7 +84,11 @@ string Get(const string& path, bool keepAlive = false) {
 }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc != 4) {
+        cerr << "Usage: httpconnProcessTest VERSION_PLUGIN FAILURE_PLUGIN BINARY_PLUGIN\n";
+        return 1;
+    }
     int passed = 0;
     int failed = 0;
     Site site;
@@ -149,6 +163,56 @@ int main() {
         const auto wire = connection.TakeResponse();
         Require(wire.starts_with("HTTP/1.1 403 Forbidden\r\n") && wire.find("PRIVATE_FILE") == string::npos,
                 "handler bypassed the safe file opener");
+    });
+    run("connection retains its plugin and copies the response", [&] {
+        string wire;
+        weak_ptr<Module> observed;
+        {
+            auto module = Module::Load(argv[1]);
+            observed = module;
+            Connection connection;
+            connection.SetBusinessModule(module);
+            module.reset();
+            Require(!observed.expired(), "connection did not retain its module");
+            connection.Feed(Get("/api/version"));
+            Require(connection.process(), "plugin response missing");
+            wire = connection.TakeResponse();
+        }
+        Require(observed.expired(), "connection retained its module after destruction");
+        CheckResponse(wire, 200, "TinyWebServer v2\n");
+    });
+    run("file and plugin pipeline preserves response boundaries", [&] {
+        Connection connection;
+        connection.SetBusinessModule(Module::Load(argv[1]));
+        connection.Feed(Get("/", true) + Get("/api/version", true) + Get("/"));
+        for (const string body : {"INDEX_PAGE", "TinyWebServer v2\n", "INDEX_PAGE"}) {
+            Require(connection.process(), "pipeline response missing");
+            CheckResponse(connection.TakeResponse(), 200, body);
+        }
+        Require(!connection.IsKeepAlive(), "pipeline ignored the final Connection close");
+    });
+    run("plugin failure returns 500 and allows the next buffered request", [&] {
+        Connection connection;
+        connection.SetBusinessModule(Module::Load(argv[2]));
+        connection.Feed(Get("/api/version", true) + Get("/"));
+        Require(connection.process() && connection.IsKeepAlive(), "plugin failure broke valid framing");
+        CheckResponse(connection.TakeResponse(), 500, "Internal Server Error\n");
+        Require(connection.process(), "request after plugin failure was lost");
+        CheckResponse(connection.TakeResponse(), 200, "INDEX_PAGE");
+    });
+    run("HTTPS connection uses the same plugin dispatch", [&] {
+        SecureConnection connection;
+        connection.SetBusinessModule(Module::Load(argv[1]));
+        connection.Feed(Get("/api/version"));
+        Require(connection.process(), "HTTPS inherited dispatch did not respond");
+        CheckResponse(connection.TakeResponse(), 200, "TinyWebServer v2\n");
+    });
+    run("plugin binary body retains its exact HTTP length", [&] {
+        Connection connection;
+        connection.SetBusinessModule(Module::Load(argv[3]));
+        connection.Feed(Get("/api/version"));
+        Require(connection.process(), "binary plugin response missing");
+        CheckResponse(connection.TakeResponse(), 200, string("A\0B", 3));
     });
     cout << passed << " passed, " << failed << " failed\n";
     return failed == 0 ? 0 : 1;

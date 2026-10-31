@@ -2,6 +2,8 @@
 
 #include "../handler/requesthandler.h"
 
+#include <utility>
+
 using namespace std;
 
 const char* HttpConn::srcDir;
@@ -16,6 +18,10 @@ HttpConn::HttpConn()
 }
 
 HttpConn::~HttpConn() { Close();}
+
+void HttpConn::SetBusinessModule(shared_ptr<Module> module) {
+    businessModule_ = std::move(module);
+}
 
 void HttpConn::Init(int sockFd,const sockaddr_in& addr)
 {
@@ -128,7 +134,7 @@ bool HttpConn::process()
         response_.Init(srcDir, "/400.html", false, 400);
         response_.MakeResponse(writeBuff_);
     } else {
-        const RequestHandler handler;
+        const RequestHandler handler(UserService::Verify, businessModule_);
         const auto result = handler.Handle(request_);
         if (result.kind == HandlerResult::Kind::Text) {
             response_.MakeTextResponse(writeBuff_, result.body, result.contentType, keepAlive_, result.status);

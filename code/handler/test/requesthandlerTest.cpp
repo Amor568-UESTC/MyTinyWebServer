@@ -1,4 +1,5 @@
 #include "../requesthandler.h"
+#include "../../plugin/module.h"
 
 #include <functional>
 #include <iostream>
@@ -39,7 +40,11 @@ HttpRequest Parse(const string& path, const string& method = "GET", const string
 }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc != 3) {
+        cerr << "Usage: requesthandlerTest VERSION_PLUGIN FAILURE_PLUGIN\n";
+        return 1;
+    }
     int passed = 0;
     int failed = 0;
     const RequestHandler handler(Verify);
@@ -105,6 +110,43 @@ int main() {
             rejected = true;
         }
         Require(rejected, "null verification function was accepted");
+    });
+    run("version route calls the injected plugin", [&] {
+        const RequestHandler pluginHandler(Verify, Module::Load(argv[1]));
+        const auto request = Parse("/api/version");
+        const auto result = pluginHandler.Handle(request);
+        Require(result.kind == HandlerResult::Kind::Text && result.status == 200 &&
+                result.body == "TinyWebServer v2\n" && result.path.empty() &&
+                request.path() == "/api/version" && verificationCalls == 0,
+                "version route did not use the plugin");
+    });
+    run("plugin failure produces a public 500 response", [&] {
+        const RequestHandler pluginHandler(Verify, Module::Load(argv[2]));
+        const auto result = pluginHandler.Handle(Parse("/api/version"));
+        Require(result.kind == HandlerResult::Kind::Text && result.status == 500 &&
+                result.body == "Internal Server Error\n" && result.path.empty(),
+                "plugin failure escaped or returned a successful fallback");
+    });
+    run("non-GET version request does not enter the plugin", [&] {
+        const RequestHandler pluginHandler(Verify, Module::Load(argv[2]));
+        const auto result = pluginHandler.Handle(Parse("/api/version", "POST"));
+        Require(result.kind == HandlerResult::Kind::File && result.path == "/api/version",
+                "plugin handled an unsupported method");
+    });
+    run("static routes do not enter a failing plugin", [&] {
+        const RequestHandler pluginHandler(Verify, Module::Load(argv[2]));
+        for (const auto& [path, expected] : routes) {
+            const auto result = pluginHandler.Handle(Parse(path));
+            Require(result.kind == HandlerResult::Kind::File && result.path == expected,
+                    "static route was sent to the plugin");
+        }
+    });
+    run("login stays with the user service when a plugin is enabled", [&] {
+        accepted = true;
+        const RequestHandler pluginHandler(Verify, Module::Load(argv[2]));
+        const auto result = pluginHandler.Handle(Parse("/login", "POST", "username=alice&password=secret"));
+        Require(result.path == "/welcome.html" && verificationCalls == 1 && login,
+                "plugin replaced the login route");
     });
     cout << passed << " passed, " << failed << " failed\n";
     return failed == 0 ? 0 : 1;

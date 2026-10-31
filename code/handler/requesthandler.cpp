@@ -1,11 +1,16 @@
 #include "requesthandler.h"
 
+#include "../log/log.h"
+#include "../plugin/module.h"
+
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 
 using namespace std;
 
-RequestHandler::RequestHandler(UserVerifier verifier) : verifier_(verifier) {
+RequestHandler::RequestHandler(UserVerifier verifier, shared_ptr<Module> module)
+    : verifier_(verifier), module_(std::move(module)) {
     if (verifier_ == nullptr) {
         throw invalid_argument("User verifier must not be null");
     }
@@ -17,7 +22,17 @@ HandlerResult RequestHandler::Handle(const HttpRequest& request) const {
     if (request.method() == "GET" && result.path == "/api/version") {
         result.kind = HandlerResult::Kind::Text;
         result.path.clear();
-        result.body = "TinyWebServer v1\n";
+        if (module_ == nullptr) {
+            result.body = "TinyWebServer v1\n";
+            return result;
+        }
+        try {
+            result.body = module_->Handle(request.path());
+        } catch (const exception& error) {
+            LOG_ERROR("Plugin request failed: %s", error.what());
+            result.status = 500;
+            result.body = "Internal Server Error\n";
+        }
         return result;
     }
 

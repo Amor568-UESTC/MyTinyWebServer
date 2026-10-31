@@ -1,6 +1,6 @@
 # 业务处理层
 
-本模块把路由和数据库业务从 HTTP 解析器中分离,当前仍静态编译进服务器.运行时加载 .so 与版本切换属于后续阶段.
+本模块把路由和数据库业务从 HTTP 解析器中分离.主程序负责路由匹配,启用插件后将 GET /api/version 交给启动时加载的 .so.运行期间版本切换属于后续阶段.
 
 | 文件 | 职责 |
 | --- | --- |
@@ -15,7 +15,7 @@
 - `/` 映射到 `/index.html`.
 - `/index`、`/login`、`/register`、`/welcome`、`/video`、`/picture` 保留原有 .html 别名.
 - POST 表单提交到 `/login`、`/login.html`、`/register`、`/register.html` 时进行验证,成功选择 `/welcome.html`,失败选择 `/error.html`,沿用原页面响应方式.
-- GET `/api/version` 返回 `TinyWebServer v1\n`,类型为 `text/plain; charset=utf-8`.
+- GET `/api/version` 在禁用插件时返回内置 `TinyWebServer v1\n`,启用时返回插件正文,类型为 `text/plain; charset=utf-8`.插件失败返回 500 和通用错误正文,不回退成成功响应.
 - 其他请求交给原文件响应路径.当前按完整路径精确匹配,尚未分离查询参数.
 
 `/api/version` 的业务逻辑不访问数据库,但服务器启动仍会初始化数据库连接池,正常启动需要有效的数据库配置.
@@ -32,7 +32,7 @@ UserService 使用具名 SqlConnRAII 借还连接,使用预处理语句绑定输
 
 本轮保持现有 user 表和页面流程.密码仍按原有明文方式存储,也没有增加会话或权限管理.注册的并发唯一性仍需要数据库唯一约束等后续业务设计,不能把这次拆分视为完整认证系统.
 
-RequestHandler 的构造参数允许替换验证函数,便于不依赖 MySQL 测试路由.线上默认使用 UserService::Verify.
+RequestHandler 的构造参数允许替换验证函数,便于不依赖 MySQL 测试路由.线上默认使用 UserService::Verify.第二个参数接收 shared_ptr<Module>,由 HttpConn 复制连接持有的模块引用,保证处理期间插件仍有效.当前匹配方法和完整路径,尚未实现动态路由注册或查询参数拆分.
 
 ## 回归
 
