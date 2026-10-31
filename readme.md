@@ -88,7 +88,7 @@ bin/server --config config/server.toml
 
 仓库的命名、注释、排版及测试目录约定见 [风格Skill参考](docs/skills/tinyweb-style/SKILL.md).
 
-业务层已与解析器分离:HttpRequest 只解析请求,RequestHandler 处理页面别名与业务分派,UserService 执行参数化 SQL,HandlerResult 交给 HttpResponse 生成文件或文本响应.新增 GET `/api/version`,返回 `TinyWebServer v1\n`;端点自身不访问数据库,但启动流程仍要求数据库连接池初始化成功.业务层仍静态编译到服务器,插件加载是下一阶段.说明见 [handler 模块](code/handler/readme.md).
+业务层已与解析器分离:HttpRequest 只解析请求,RequestHandler 处理页面别名与业务分派,UserService 执行参数化 SQL,HandlerResult 交给 HttpResponse 生成文件或文本响应.新增 GET `/api/version`,返回 `TinyWebServer v1\n`;端点自身不访问数据库,但启动流程仍要求数据库连接池初始化成功.业务层仍静态编译到服务器,独立插件加载器已实现,服务器接入待完成.说明见 [handler 模块](code/handler/readme.md) 和 [plugin 模块](code/plugin/readme.md).
 
 配置读取回归不依赖数据库服务和真实证书：
 
@@ -117,12 +117,13 @@ make sql-test
 | `code/http/test/` | `httpconnProcessTest` | `make http-test` |
 | `code/http/test/` | `sslcontextTest` | `make http-test` |
 | `code/handler/test/` | `requesthandlerTest` / `userserviceTest` | `make handler-test` |
+| `code/plugin/test/` | `moduleTest` / `pluginSmoke` | `make plugin-test` |
 | `code/log/test/` | `logTest` | `make log-test` |
 | `code/server/test/` | `serverStartupTest` | `make server-test` |
 
 可以进入任意上述目录,用 `make` 编译、`make test` 编译并运行、`make clean` 清理该 Makefile 生成的程序.原有 ThreadPoolV2 和 HTTPS 实验测试继续保留原来的单独编译方式,具体见各 test 目录的说明.
 
-六个根目录入口共 190 项检查:配置 59、连接池 15、文件与文本响应 17、请求解析 24、连接处理链 8、业务路由 22、用户服务 14、TLS 上下文及握手 10、日志 8、启动失败 13.TLS 测试自动签发临时证书并通过内存 BIO 握手,数据库相关测试使用模拟依赖,均不需要本机数据库密码或占用服务端口.真实数据库业务与并发关闭问题仍需独立验收.
+七个根目录入口共 216 项检查:配置 59、连接池 15、文件与文本响应 17、请求解析 24、连接处理链 8、业务路由 22、用户服务 14、TLS 上下文及握手 10、日志 8、启动失败 13、插件模块 26.插件入口还运行独立加载示例.TLS 测试自动签发临时证书并通过内存 BIO 握手,数据库相关测试使用模拟依赖,均不需要本机数据库密码或占用服务端口.真实数据库业务与并发关闭问题仍需独立验收.
 
 本机 `config/server.toml`、`.env`、证书、私钥和构建产物已由 `.gitignore` 忽略。`.vscode` 只共享 C++ 提示配置和文件类型关联，其他本地配置忽略。
 

@@ -1,6 +1,6 @@
 # 配置化与 .so 热更新实践指南
 
-首次记录：2026-10-20。最近同步：2026-10-27。本文同时记录当前实现和后续实施路线，尚未实现的部分在各阶段单独标明。
+首次记录：2026-10-20。最近同步：2026-10-30。本文同时记录当前实现和后续实施路线，尚未实现的部分在各阶段单独标明。
 
 | 阶段 | 当前状态 |
 | --- | --- |
@@ -9,7 +9,8 @@
 | 三：环境变量与可选 `.env` | 进程环境变量读取已实现，TOML 的 `password` 与 `passwordEnv` 互斥；`.env` 文件读取待实现 |
 | 四：模块行为与初始化 | 日志配置、启动失败回收与退出码、TLS 客户端验证开关和响应头已接入并有自动回归；真实服务与数据库业务仍待验收 |
 | 五：业务拆分 | 已接入 handler、文本响应和 GET /api/version,解析器不再访问数据库;自动回归通过 |
-| 六～八：插件加载与热更新 | 待实现,下面的 ABI、构建命令和重载流程仍属于实施计划 |
+| 六：插件加载 | 共享接口、示例插件和 Module 已实现,26 项独立回归通过;服务器配置和请求链接入待完成 |
+| 七～八：运行中版本切换 | 待实现,下面的快照、重载与触发流程仍属于实施计划 |
 
 配置结构、TOML Loader 和环境变量密码已接入。本轮补齐日志与启动失败处理,并分离客户端 CA 与强制客户端证书开关.测试覆盖配置、模拟数据库、日志、真实内存 TLS 握手和注入的启动失败路径;真实数据库登录注册及完整 HTTP/HTTPS 服务仍需手动验收.
 
@@ -351,6 +352,8 @@ GET `/api/version` 返回 `TinyWebServer v1\n`,类型为 text/plain; charset=utf
 
 ## 8. 阶段六：定义插件 ABI，先实现启动加载
 
+详细操作见 [.so 启动加载分步实践](plugin-startup-guide.md).共享头、插件、Module 和独立加载程序已实现,26 项模块回归通过;服务器配置和请求链接入仍待完成.当前可运行 `make plugin-test`,不需要启动服务器或连接数据库.
+
 ### 建议文件
 
 - `code/plugin/plugin_api.h`：主程序与插件共享的接口。
@@ -375,7 +378,7 @@ extern "C" {
 
 typedef struct {
     const char* path;
-    size_t path_size;
+    size_t pathSize;
 } TinywebRequestView;
 
 typedef struct {
@@ -384,8 +387,8 @@ typedef struct {
 } TinywebResponseWriter;
 
 typedef struct {
-    uint32_t abi_version;
-    uint32_t struct_size;
+    uint32_t abiVersion;
+    uint32_t structSize;
     int (*create)(void** instance);
     int (*handle)(void* instance, const TinywebRequestView* request,
                   const TinywebResponseWriter* writer);
@@ -400,7 +403,7 @@ const TinywebPluginApi* tinyweb_plugin_get_api(void);
 #endif
 ```
 
-约定第一版 ABI 为 1，`struct_size` 填 `sizeof(TinywebPluginApi)`；实际返回的函数表在模块加载期间保持有效。业务接口成熟后再添加 method、请求体、响应状态和主程序服务接口，并制定相应的 ABI 兼容规则。
+约定第一版 ABI 为 1，`structSize` 填 `sizeof(TinywebPluginApi)`；实际返回的函数表在模块加载期间保持有效。业务接口成熟后再添加 method、请求体、响应状态和主程序服务接口，并制定相应的 ABI 兼容规则。
 
 必须明确的调用规则：
 

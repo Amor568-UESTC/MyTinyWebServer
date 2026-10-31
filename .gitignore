@@ -58,6 +58,9 @@
 /code/server/test/serverStartupTest
 /code/handler/test/requesthandlerTest
 /code/handler/test/userserviceTest
+/code/plugin/test/moduleTest
+/code/plugin/test/pluginSmoke
+/code/plugin/test/fixtures/
 /webbench-1.5/webbench
 
 # CMake / Ninja / clangd 缓存
