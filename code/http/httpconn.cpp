@@ -1,5 +1,10 @@
 #include"httpconn.h"
 
+#include "../handler/requesthandler.h"
+#include "../plugin/pluginmanager.h"
+
+#include <utility>
+
 using namespace std;
 
 const char* HttpConn::srcDir;
@@ -15,6 +20,10 @@ HttpConn::HttpConn()
 
 HttpConn::~HttpConn() { Close();}
 
+void HttpConn::SetPluginManager(shared_ptr<PluginManager> manager) {
+    pluginManager_ = std::move(manager);
+}
+
 void HttpConn::Init(int sockFd,const sockaddr_in& addr)
 {
     assert(sockFd>0);
@@ -29,6 +38,8 @@ void HttpConn::Init(int sockFd,const sockaddr_in& addr)
     iov_[0] = {};
     iov_[1] = {};
     request_.Init();
+    requestDone_ = false;
+    keepAlive_ = false;
 
     LOG_INFO("Client[%d](%s:%d) in, userCount:%d.",
         fd_,GetIP(),GetPort(),(int)userCnt);
@@ -120,9 +131,20 @@ bool HttpConn::process()
     const bool canContinue = !IsReadClose() || readBuff_.ReadableBytes() > 0;
     keepAlive_ = complete && request_.IsKeepAlive() && canContinue;
     
-    string responsePath = complete ? request_.path() : "/400.html";
-    response_.Init(srcDir, responsePath, keepAlive_, complete ? 200 : 400);
-    response_.MakeResponse(writeBuff_);
+    if (!complete) {
+        response_.Init(srcDir, "/400.html", false, 400);
+        response_.MakeResponse(writeBuff_);
+    } else {
+        auto module = pluginManager_ ? pluginManager_->Snapshot() : nullptr;
+        const RequestHandler handler(UserService::Verify, std::move(module));
+        const auto result = handler.Handle(request_);
+        if (result.kind == HandlerResult::Kind::Text) {
+            response_.MakeTextResponse(writeBuff_, result.body, result.contentType, keepAlive_, result.status);
+        } else {
+            response_.Init(srcDir, result.path, keepAlive_, result.status);
+            response_.MakeResponse(writeBuff_);
+        }
+    }
     iov_[0] = {}, iov_[1] = {}; //清空向量
     iov_[0].iov_base=const_cast<char*>(writeBuff_.Peek());
     iov_[0].iov_len=writeBuff_.ReadableBytes();

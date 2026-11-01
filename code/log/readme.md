@@ -1,181 +1,33 @@
-### 实现阻塞队列
+# 日志模块
 
-    //对于一个模板类，.cpp和.h文件分开会产生编译上的
-    顺序错误，所以一般放在一起用.hpp作为后缀
+日志通过 `Log::Instance()` 取得进程内单例,由服务器在建立数据库连接之前初始化.MySQL 客户端库的初始化仍早于日志线程创建,启动顺序见 [服务器说明](../server/readme.md).
 
-## 类内部私有成员和函数
-    # deq_           deque<T>
-    stl中的双端对列，用于存储数据
+## 配置与接口
 
-    # capacity_      size_t 
-    最大容量
+`init(level, path, suffix, maxQueueCapacity)` 当前只支持启动时成功初始化一次,失败后可以重试.文件和队列准备成功后才创建写线程并设置可用状态.目录创建或文件打开失败会抛异常,线程创建失败会回收已经打开的文件.
 
-    # mtx_           mutex
-    锁机制，保证生产者和消费者操作互斥
+| 配置 | 行为 |
+| --- | --- |
+| `logging.enabled` | 关闭时不初始化日志,LOG 宏直接跳过 |
+| `logging.level` | 0/1/2/3 分别为 DEBUG/INFO/WARN/ERROR,只输出不低于阈值的消息 |
+| `logging.asyncQueueSize` | 0 表示同步写入,正数为实际异步队列容量 |
 
-    # isClose_       bool
-    关闭标志
+`GetLevel()` 和 `SetLevel()` 访问输出阈值,`IsOpen()` 查询可用状态,`GetQueueCapacity()` 返回实际队列容量,同步模式返回 0.服务器日志目录固定为启动工作目录下的 `./log`,后缀为 `.log`,按日期和每 50000 行轮转.当前没有日志目录或轮转行数的 TOML 字段.
 
-    # condConsumer_  condition_variable
-    # condProducer_  condition_variable
-    生产者和消费者的条件变量
+## 写入与退出
 
-    //生产者&消费者模式
-    生产者可以理解为：为队列添加成员；消费者则是减少
+- `.cpp` 使用 `LOG_DEBUG/INFO/WARN/ERROR`,宏按阈值过滤,直接调用 `write()` 不经过宏过滤.
+- 文件、缓冲区和轮转状态共用互斥锁,日期转换使用 localtime_r.
+- 格式化前先计算正文长度并扩容,避免长记录截断后把所需长度误记为已写入长度.
+- 异步队列未满时提交字符串,队列满时在文件锁下同步写入,不等待队列空位.混合写入不承诺记录的严格时间顺序.
+- `flush()` 唤醒消费者并刷新当前文件缓冲,不等待全部异步记录落盘.
+- 析构时先停止接收新记录,关闭队列,让消费者排空已有记录并 join,最后刷新和关闭文件.
+- 轮转失败时保留原文件并向 stderr 报告,不通过断言终止服务.
 
-## 类内部公有函数
-    # BlockDeque(size_t )
-    初始化设置最大容量
-    explicit关键字禁止自动调用拷贝初始化，
-    禁止拷贝函数对参数进行隐式转换
+BlockDeque 的 Close 是幂等关闭:禁止新写入,保留已有数据供 pop 继续取出,排空后返回 false.关闭状态包含在等待谓词中,避免关闭先于等待时丢失唤醒.
 
-    # ~BlockDeque()
-    调用Close()
+上述规则管理日志自身的文件和写线程,服务器连接任务与全局退出的协调仍属于已知问题 6.
 
-    # clear()
-    清空队列deq_
+## 回归
 
-    # empty() full()
-    判断deq_为空或满
-
-    # Close()
-    清空deq_并使得isClose_标志为1
-    生产者和消费者唤醒全部线程
-
-    # size()
-    返回deq_的size
-
-    # capacity()
-    返回最大容量capacity_
-
-    # back()
-    返回deq_的back
-
-    # push_back(const T& item)
-    推入队列为生产者操作，先要判断是否满？
-    若满则生产者等待，阻塞。
-    推入后则消费者可以唤醒一个线程
-
-    # push_front(const T& item)
-    同上
-
-    # pop(T& item)
-    出队列为消费者操作，先判断空？
-    若空消费者等待，注意关闭的情况！
-    出队列，生产者可以唤醒一个线程。
-    返回是否操作成功
-
-    # pop(T& item,int timeout)
-    同上，设置了消费者最大等待时间，超时失败
-
-    # flush()
-    冲刷，消费者唤醒一个线程
-
-
-
-### log实现日志
-
-    //单例模式：Log类只会有一个静态的实例对象，
-    采用懒汉模式实现，只有在调用Instance()函数时
-    才会进行实例化。
-    
-## 类内部私有成员和函数
-
-    # Log()
-    构造函数，隐藏拒绝外部产生新的对象
-    几个指针都置空
-
-    # ~Log()
-    先将队列中未出队的清空，然后关闭队列，写线程；
-
-    # AppendLogLevelTitle_(int level)
-    设置等级放入buff_中作为区分
-
-    # AsyncWrite_()
-    异步写，将队列中的数据写入fp_流中
-
-    # path_         const char*
-    文件路径名称
-
-    # suffix_       const char*
-    文件后缀名称
-
-    # MAX_LINES     int
-    单个文件中最大行数量
-
-    # lineCnt_      int
-    行数量
-
-    # toDay_        int
-    记录日期，为几号
-
-    # level_        int 
-    日志能够支持的最高等级
-    
-    # isOpen_       bool
-    是否开启标志
-
-    # isAsync_      bool
-    是否异步标志，异步会开启队列deque_
-
-    # buff_         Buffer
-    缓冲池
-
-    # fp_           FILE*
-    封装的文件结构体，用于读写文件
-
-    # deque_        unique_ptr<BlockDeque<string>>
-    阻塞队列的独有指针，在异步时才开启
-    队列中为要写入文件的数据(条)
-
-    # writeThread_  unique_ptr<thread>
-    写线程，单独一个用于写log文件，满足性能且占用资源少
-
-    # mtx_          mutex
-    🔓机制
-
-## 类内部公有函数
-    # init(int ,...)
-    初始化level_,path_,suffix_等，设置isOpen_打开，
-    若队列capacity设置大于0,即isAsync_打开，否则队列
-    不打开，即为同步。
-    随后设置文件名称为日期，清空buff_数据，若fp_存在则
-    先冲刷清空，关闭，最后重新打开，否则创建并打开。
-
-    # Instance()
-    返回单个实例的地址
-
-    # FlushLogThread()
-    冲刷日志线程，即调用实例中的异步写函数
-
-    # write(int level,const char* format,...)
-    先查看日期是否正确或者行数是否超出?若是，则使用新的文件，
-    更新文件名称。接着锁上，将deque_和fp_中的数据冲刷进老文件。
-    重新开新文件流。
-    加锁，开始进行写流程：往buff_中写好时间前缀，加上等级，然后
-    处理可变参数，将其写入buff_中，最后结尾加上结束符号。
-    若是异步：则先将buff_写入deque_,deque_通过flush()再写入
-    文件中；若为同步：直接把buff_内容写入文件fp_中。清理buff_.
-
-    # flush()
-    若为异步则冲刷队列deque_，再冲刷fp_,将fp_中
-    数据全部写入磁盘文件
-
-    # GetLevel()
-    获取level_
-
-    # SetLevel(int level)
-    设置level_
-
-    # IsOpen()
-    查看isOpen_的值
-
-## .h文件末尾定义的宏函数
-
-    //宏函数可以提高效率，减少调用函数开销
-
-    # LOG_BASE(level,format...)
-    调用实例，如果开启了日志且最高等级符合要求，
-    则将format等内容写入。
-    采用do while(0)形式可以确保作为整体实行，避免
-    语句末尾分号导致编译错误。
+本目录下的 [test/](test/readme.md) 提供 8 项自动回归,项目根目录执行 `make log-test`.

@@ -1,109 +1,81 @@
-#include"webserver.h"
+#include "webserver.h"
+
+#include "../plugin/pluginmanager.h"
+#include "../plugin/pluginreloader.h"
+#include "../config/configloader.h"
+#include "reloadsignal.h"
+
+#include <utility>
+#include <stdexcept>
+#include <system_error>
 
 using namespace std;
 
-bool WebServer::initSocket_()
+void WebServer::initSocket_()
 {
-    int ret;
-    sockaddr_in addr;
-    if(port_>65535||port_<1024)
-    {
-        LOG_ERROR("Port:%d error!",port_);
-        return 0;
+    if (config_.server.port > 65535 || config_.server.port < 1024) {
+        throw invalid_argument("Server port must be between 1024 and 65535");
     }
-    addr.sin_family=AF_INET;
-    addr.sin_addr.s_addr=htonl(INADDR_ANY);
-    addr.sin_port=htons(port_);
-    linger optLinger={0};
-    if(openLinger_)
-    {
-        optLinger.l_onoff=1;
-        optLinger.l_linger=1;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(config_.server.port);
+    linger optLinger{};
+    if (config_.server.linger) {
+        optLinger.l_onoff = 1;
+        optLinger.l_linger = 1;
     }
 
-    listenFd_=socket(AF_INET,SOCK_STREAM,0);
-    if(listenFd_<0)
-    {
-        LOG_ERROR("Create socket error!");
-        return 0;
+    //失败时由构造函数统一关闭listenFd_,避免不同分支重复关闭
+    listenFd_ = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (listenFd_ < 0) {
+        throw system_error(errno, generic_category(), "socket failed");
     }
-
-    ret=setsockopt(listenFd_,SOL_SOCKET,SO_LINGER,&optLinger,sizeof(optLinger));
-    if(ret<0)
-    {
-        close(listenFd_);
-        LOG_ERROR("Init linger error!");
-        return 0;
+    if (setsockopt(listenFd_, SOL_SOCKET, SO_LINGER, &optLinger, sizeof(optLinger)) < 0) {
+        throw system_error(errno, generic_category(), "setsockopt(SO_LINGER) failed");
     }
-
-    int optval=1;
-    ret=setsockopt(listenFd_,SOL_SOCKET,SO_REUSEADDR,(const void*)&optval,sizeof(int));
-    if(ret==-1)
-    {
-        LOG_ERROR("set socket setsockopt error!");
-        close(listenFd_);
-        return 0;
+    const int reuseAddress = 1;
+    if (setsockopt(listenFd_, SOL_SOCKET, SO_REUSEADDR, &reuseAddress, sizeof(reuseAddress)) < 0) {
+        throw system_error(errno, generic_category(), "setsockopt(SO_REUSEADDR) failed");
     }
-
-    ret=bind(listenFd_,(sockaddr*)&addr,sizeof(addr));
-    if(ret<0)
-    {
-        LOG_ERROR("Bind Port:%d error!",port_);
-        close(listenFd_);
-        return 0;
+    if (SetFdNonblock(listenFd_) < 0) {
+        throw system_error(errno, generic_category(), "fcntl(O_NONBLOCK) failed");
     }
-
-    ret=listen(listenFd_,6);
-    if(ret<0)
-    {
-        LOG_ERROR("Listen Port:%d error!",port_);
-        close(listenFd_);
-        return 0;
+    if (bind(listenFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        throw system_error(errno, generic_category(), "bind port " + to_string(config_.server.port) + " failed");
     }
-
-    ret=epoller_->AddFd(listenFd_,listenEvent_|EPOLLIN);
-    if(ret==0)
-    {
-        LOG_ERROR("Add listen error!");
-        close(listenFd_);
-        return 0;
+    if (listen(listenFd_, 6) < 0) {
+        throw system_error(errno, generic_category(), "listen failed");
     }
-    SetFdNonblock(listenFd_);
-    LOG_INFO("Add listen error!");
-    return 1;
+    if (!epoller_->AddFd(listenFd_, listenEvent_ | EPOLLIN)) {
+        throw system_error(errno, generic_category(), "epoll_ctl(ADD listener) failed");
+    }
+    LOG_INFO("Listening on port %d", config_.server.port);
 }
 
-bool WebServer::initSSL_(const char* certPath,const char* keyPath,const char* caPath) 
+bool WebServer::initSSL_(const char* certPath, const char* keyPath, const char* caPath,
+                         bool requireClientCertificate)
 {
-    return SSLContext::GetInstance().Initialize(certPath, keyPath, caPath);
+    return SSLContext::GetInstance().Initialize(certPath, keyPath, caPath, requireClientCertificate);
 }
 
-void WebServer::InitEventMode_(int trigMode)
+void WebServer::InitEventMode_(TriggerMode listenMode, TriggerMode connectionMode)
 {
-    listenEvent_=EPOLLRDHUP;
-    connEvent_=EPOLLONESHOT|EPOLLRDHUP;
-    switch(trigMode)
-    {
-        case 0:
-            break;
-        case 1:
-            connEvent_|=EPOLLET;
-            break;
-        case 2:
-            listenEvent_|=EPOLLET;
-            break;
-        default:
-            listenEvent_|=EPOLLET;
-            connEvent_|=EPOLLET;
-            break;
+    listenEvent_ = EPOLLRDHUP;
+    connEvent_ = EPOLLONESHOT | EPOLLRDHUP;
+    if (listenMode == TriggerMode::ET) {
+        listenEvent_ |= EPOLLET;
     }
-    HttpConn::isET=(connEvent_&EPOLLET);
+    if (connectionMode == TriggerMode::ET) {
+        connEvent_ |= EPOLLET;
+    }
+    HttpConn::isET = (connEvent_ & EPOLLET) != 0;
 }
 
-void WebServer::AddClient_(int fd,sockaddr_in addr)
+void WebServer::AddClient_(int fd, sockaddr_in addr)
 {
-    assert(fd>0);
-    if (enableHttps_) {
+    assert(fd > 0);
+    if (config_.tls.enabled) {
         user_[fd] = make_unique<HttpsConn>();
     } else {
         user_[fd] = make_unique<HttpConn>();
@@ -114,9 +86,10 @@ void WebServer::AddClient_(int fd,sockaddr_in addr)
     }
 
     auto* client = user_[fd].get();
+    client->SetPluginManager(pluginManager_);
     client->Init(fd, addr);
 
-    if (enableHttps_) {
+    if (config_.tls.enabled) {
         auto* https = dynamic_cast<HttpsConn*>(client);
         if (!https || !https->InitSSL()) {
             client->Close();
@@ -130,64 +103,66 @@ void WebServer::AddClient_(int fd,sockaddr_in addr)
     }
 
     // 全部成功之后再添加定时器
-    if (timeoutMS_ > 0) {
-        timer_->add(fd, timeoutMS_, bind(&WebServer::CloseConn_, this, client));
+    if (config_.server.idleTimeoutMs > 0) {
+        timer_->add(fd, config_.server.idleTimeoutMs, bind(&WebServer::CloseConn_, this, client));
     }
-    
-    LOG_INFO("Client[%d] in!",user_[fd]->GetFd());
+
+    LOG_INFO("Client[%d] in!", user_[fd]->GetFd());
 }
 
 void WebServer::DealListen_()
 {
     sockaddr_in addr;
-    socklen_t len=sizeof(addr);
-    do
-    {
-        int fd=accept(listenFd_,(sockaddr*)&addr,&len);
-        if(fd<=0) return ;
-        else if(HttpConn::userCnt>=MAX_FD)
-        {
-            SendError_(fd,"Server busy!");
+    socklen_t len = sizeof(addr);
+    do {
+        int fd = accept(listenFd_, (sockaddr*)&addr, &len);
+        if (fd <= 0) {
+            return;
+        } else if (HttpConn::userCnt >= MAX_FD) {
+            SendError_(fd, "Server busy!");
             LOG_WARN("Client is full!");
-            return ;
+            return;
         }
-        AddClient_(fd,addr);
-    }while(listenEvent_&EPOLLET);
+        AddClient_(fd, addr);
+    } while (listenEvent_ & EPOLLET);
 }
 
 void WebServer::DealWrite_(HttpConn* client)
 {
     assert(client);
     ExtentTime_(client);
-    threadpool_->AddTask(bind(&WebServer::OnWrite_,this,client));
+    threadpool_->AddTask(bind(&WebServer::OnWrite_, this, client));
 }
 
 void WebServer::DealRead_(HttpConn* client)
 {
     assert(client);
     ExtentTime_(client);
-    threadpool_->AddTask(bind(&WebServer::OnRead_,this,client));
+    threadpool_->AddTask(bind(&WebServer::OnRead_, this, client));
 }
 
-void WebServer::SendError_(int fd,const char* info)
+void WebServer::SendError_(int fd, const char* info)
 {
-    assert(fd>0);
-    int ret=send(fd,info,strlen(info),0);
-    if(ret<0)
-        LOG_WARN("send error to client[%d] error!",fd);
+    assert(fd > 0);
+    int ret = send(fd, info, strlen(info), 0);
+    if (ret < 0) {
+        LOG_WARN("send error to client[%d] error!", fd);
+    }
     close(fd);
 }
 
 void WebServer::ExtentTime_(HttpConn* client)
 {
     assert(client);
-    if(timeoutMS_>0) timer_->adjust(client->GetFd(),timeoutMS_);
+    if (config_.server.idleTimeoutMs > 0) {
+        timer_->adjust(client->GetFd(), config_.server.idleTimeoutMs);
+    }
 }
 
 void WebServer::CloseConn_(HttpConn* client)
 {
     assert(client);
-    LOG_INFO("Client[%d] quit!",client->GetFd());
+    LOG_INFO("Client[%d] quit!", client->GetFd());
     epoller_->DelFd(client->GetFd());
     client->Close();
 }
@@ -199,11 +174,11 @@ void WebServer::OnRead_(HttpConn* client)
     auto* https = dynamic_cast<HttpsConn*>(client);
     if (https && !https->isHandShakeDone()) {
         OnHandShake(https);
-        return ;
+        return;
     }
-    ssize_t ret=-1;
-    int readErrno=0;
-    ret=client->read(&readErrno);
+    ssize_t ret = -1;
+    int readErrno = 0;
+    ret = client->read(&readErrno);
 
     // 优先对https进行状态检查和挂起操作处理, 避免在握手未完成时进行HTTP处理
     if (https) {
@@ -240,10 +215,9 @@ void WebServer::OnRead_(HttpConn* client)
         }
     }
 
-    if(ret<=0&&readErrno!=EAGAIN)
-    {
+    if (ret <= 0 && readErrno != EAGAIN) {
         CloseConn_(client);
-        return ;
+        return;
     }
     OnProcess(client);
 }
@@ -254,11 +228,11 @@ void WebServer::OnWrite_(HttpConn* client)
     auto* https = dynamic_cast<HttpsConn*>(client);
     if (https && !https->isHandShakeDone()) {
         OnHandShake(https);
-        return ;
+        return;
     }
-    ssize_t ret=-1;
-    int writeErrno=0;
-    ret=client->write(&writeErrno);
+    ssize_t ret = -1;
+    int writeErrno = 0;
+    ret = client->write(&writeErrno);
 
     if (https) {
         using State = HttpsConn::IOState;
@@ -304,20 +278,15 @@ void WebServer::OnWrite_(HttpConn* client)
         return;
     }
 
-    if(client->ToWriteBytes()==0)
-    {
-        if(client->IsKeepAlive())
-        {
+    if (client->ToWriteBytes() == 0) {
+        if (client->IsKeepAlive()) {
             OnProcess(client);
-            return ;
+            return;
         }
-    }
-    else if(ret<0)
-    {
-        if(writeErrno==EAGAIN)
-        {
-            epoller_->ModFd(client->GetFd(),connEvent_|EPOLLOUT);
-            return ;
+    } else if (ret < 0) {
+        if (writeErrno == EAGAIN) {
+            epoller_->ModFd(client->GetFd(), connEvent_ | EPOLLOUT);
+            return;
         }
     }
     CloseConn_(client);
@@ -366,7 +335,7 @@ void WebServer::OnHandShake(HttpsConn* client)
 
 int WebServer::SetFdNonblock(int fd)
 {
-    assert(fd>0);
+    assert(fd >= 0);
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) {
         return -1;
@@ -374,76 +343,131 @@ int WebServer::SetFdNonblock(int fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-WebServer::WebServer(
-    int port,int trigMode,int timeoutMS,bool OptLinger,
-    int sqlPort,const char* sqlUser,const char* sqlPwd,const char* dbName,
-    int connPoolNum,int threadNum,bool openLog,int logLevel,int logQueSize,
-    bool enableHttps,const char* certPath,const char* keyPath,
-    const char* caPath
-):  port_(port),openLinger_(OptLinger),timeoutMS_(timeoutMS),isClose_(0),
-    timer_(new HeapTimer()),threadpool_(new ThreadPool(threadNum)),epoller_(new Epoller()),
-    enableHttps_(enableHttps)
+WebServer::WebServer(ServerConfig config, filesystem::path configPath)
+    : config_(move(config)),
+      configPath_(filesystem::absolute(configPath)),
+      isClose_(false),
+      listenFd_(-1),
+      listenEvent_(0),
+      connEvent_(0),
+      pluginManager_(make_shared<PluginManager>()),
+      timer_(make_unique<HeapTimer>()),
+      threadpool_(nullptr),
+      epoller_(nullptr)
 {
-    srcDir_=getcwd(nullptr,256);
-    assert(srcDir_);
-    strncat(srcDir_,"/rss/",16);
-    HttpConn::userCnt=0;
-    HttpConn::srcDir=srcDir_;
-    SqlConnPool::Instance()->Init("localhost",sqlPort,sqlUser,sqlPwd,dbName,connPoolNum);
-    InitEventMode_(trigMode);
-    if(!initSocket_()) isClose_=1;
-    if (enableHttps_) {
-        if (!certPath || !*certPath || !keyPath || !*keyPath) {
-            isClose_ = true;
-        } else if (!initSSL_(certPath, keyPath, caPath)) {
-            isClose_ = true;
+    SqlConnPool* sqlPool = nullptr;
+    bool databaseReady = false;
+    try {
+        //单例构造先初始化MySQL库,此时尚未创建日志线程或工作线程
+        sqlPool = SqlConnPool::Instance();
+        const auto& logging = config_.logging;
+        if (logging.enabled) {
+            Log::Instance()->init(logging.level, "./log", ".log", logging.asyncQueueSize);
         }
-    }
-    if(openLog)
-    {
-        Log::Instance()->init(logLevel,"./log",".log",logQueSize);
-        if(isClose_) LOG_ERROR("========== Server init error!==========");
-        else
-        {
-            LOG_INFO("========== Server init ==========");
-            LOG_INFO("Port:%d, OpenLinger: %s",port_,OptLinger?"true":"false");
-            LOG_INFO("Listen Mode: %s, OpenConn Mode: %s",
-                        listenEvent_&EPOLLET?"ET":"LT",
-                        connEvent_&EPOLLET?"ET":"LT");
-            LOG_INFO("LogSys level: %d",logLevel);
-            LOG_INFO("srcDir: %s",HttpConn::srcDir);
-            LOG_INFO("SqlConnPool num: %d, ThreadPool num: %d",connPoolNum,threadNum);
+
+        const auto& db = config_.database;
+        sqlPool->Init(db.host.c_str(), db.port, db.user.c_str(),
+                      db.password.c_str(), db.name.c_str(), db.poolSize);
+        databaseReady = true;
+        const auto& tls = config_.tls;
+        if (tls.enabled && !initSSL_(tls.certificate.c_str(), tls.privateKey.c_str(),
+            tls.clientCaFile.empty() ? nullptr : tls.clientCaFile.c_str(),
+            tls.requireClientCertificate)) {
+            throw runtime_error("TLS initialization failed: " + SSLContext::GetInstance().GetLastError());
         }
+
+        if (config_.plugin.enabled) {
+            pluginManager_->Reload(config_.plugin.path);
+            LOG_INFO("Business plugin loaded: %s", config_.plugin.path.c_str());
+        }
+
+        InitEventMode_(config_.server.listenMode, config_.server.connectionMode);
+        epoller_ = make_unique<Epoller>();
+        initSocket_();
+        if (config_.plugin.enabled) {
+            reloadSignal_ = make_unique<ReloadSignal>();
+            if (!epoller_->AddFd(reloadSignal_->GetFd(), EPOLLIN)) {
+                throw system_error(errno, generic_category(), "epoll_ctl(ADD reload signal) failed");
+            }
+            //只捕获拥有自身生命周期的对象,重载线程不引用WebServer裸指针
+            pluginReloader_ = make_unique<PluginReloader>([manager = pluginManager_, path = configPath_] {
+                const auto candidate = LoadConfig(path);
+                if (!candidate.plugin.enabled) {
+                    throw runtime_error("Disabling the plugin requires a server restart");
+                }
+                manager->Reload(candidate.plugin.path);
+                LOG_INFO("Business plugin reloaded: %s", candidate.plugin.path.c_str());
+            });
+        }
+        //所有外部依赖准备成功后才创建工作线程
+        threadpool_ = make_unique<ThreadPool>(config_.server.workerThreads);
+        HttpConn::userCnt = 0;
+        HttpConn::srcDir = config_.server.documentRoot.c_str();
+
+        LOG_INFO("========== Server init ==========");
+        LOG_INFO("Port:%d, OpenLinger: %s", config_.server.port,
+                 config_.server.linger ? "true" : "false");
+        LOG_INFO("Listen Mode: %s, OpenConn Mode: %s",
+                 listenEvent_ & EPOLLET ? "ET" : "LT",
+                 connEvent_ & EPOLLET ? "ET" : "LT");
+        LOG_INFO("LogSys level: %d, queue capacity: %zu", logging.level,
+                 Log::Instance()->GetQueueCapacity());
+        LOG_INFO("srcDir: %s", HttpConn::srcDir);
+        LOG_INFO("SqlConnPool num: %d, ThreadPool num: %d", db.poolSize, config_.server.workerThreads);
+    } catch (...) {
+        //构造失败不会调用WebServer析构函数,这里回收已取得的启动资源
+        if (listenFd_ >= 0) {
+            close(listenFd_);
+            listenFd_ = -1;
+        }
+        if (databaseReady) {
+            sqlPool->ClosePool();
+        }
+        throw;
     }
 }
 
 WebServer::~WebServer()
 {
-    close(listenFd_);
-    isClose_=1;
-    free(srcDir_);
+    //停止接收重载任务,等待正在执行的任务结束后再销毁其他成员
+    pluginReloader_.reset();
+    if (listenFd_ >= 0) {
+        close(listenFd_);
+        listenFd_ = -1;
+    }
+    isClose_ = true;
     SqlConnPool::Instance()->ClosePool();
 }
 
 void WebServer::Start()
 {
-    int timeMS=-1;
-    if(!isClose_) LOG_INFO("========== Server start ==========");
-    while(!isClose_)
-    {
-        if(timeoutMS_>0) timeMS=timer_->GetNextTick();
-        int eventCnt=epoller_->Wait(timeMS);
-        for(int i=0;i<eventCnt;i++)
-        {
-            int fd=epoller_->GetEventFd(i);
-            uint32_t events=epoller_->GetEvents(i);
-            if(fd==listenFd_) DealListen_();
-            else if(events&(EPOLLHUP|EPOLLERR))
-            {
+    int timeMS = -1;
+    if (!isClose_) {
+        LOG_INFO("========== Server start ==========");
+    }
+    while (!isClose_) {
+        if (config_.server.idleTimeoutMs > 0) {
+            timeMS = timer_->GetNextTick();
+        }
+        int eventCnt = epoller_->Wait(timeMS);
+        for (int i = 0; i < eventCnt; i++) {
+            int fd = epoller_->GetEventFd(i);
+            uint32_t events = epoller_->GetEvents(i);
+            if (reloadSignal_ && fd == reloadSignal_->GetFd()) {
+                if (events & (EPOLLERR | EPOLLHUP)) {
+                    throw runtime_error("Reload signal descriptor failed");
+                }
+                if (reloadSignal_->Consume()) {
+                    pluginReloader_->Request();
+                }
+                continue;
+            }
+            if (fd == listenFd_) {
+                DealListen_();
+            } else if (events & (EPOLLHUP | EPOLLERR)) {
                 assert(user_.count(fd));
                 CloseConn_(user_[fd].get());
-            }
-            else if (events & (EPOLLIN | EPOLLOUT | EPOLLRDHUP)) {
+            } else if (events & (EPOLLIN | EPOLLOUT | EPOLLRDHUP)) {
                 assert(user_.count(fd));
 
                 HttpConn* client = user_[fd].get();

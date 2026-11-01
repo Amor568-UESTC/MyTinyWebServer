@@ -22,6 +22,9 @@
 !.env.sample
 !.env.template
 
+# 本机服务器配置；配置示例可以提交。
+/config/server.toml
+
 # C/C++ 编译、链接与调试产物
 *.o
 *.obj
@@ -43,8 +46,23 @@
 *.dSYM/
 
 # 项目中没有扩展名的可执行文件
+/code/config/test/configloaderTest
+/code/http/test/httpresponseTest
+/code/http/test/httprequestTest
+/code/http/test/httpconnProcessTest
+/code/http/test/sslcontextTest
 /code/http/test/httpsconnTest
+/code/log/test/logTest
+/code/pool/test/sqlconnpoolTest
 /code/pool/test/testThreadPool
+/code/server/test/serverStartupTest
+/code/handler/test/requesthandlerTest
+/code/handler/test/userserviceTest
+/code/plugin/test/moduleTest
+/code/plugin/test/pluginSmoke
+/code/plugin/test/pluginmanagerTest
+/code/server/test/reloadsignalTest
+/code/plugin/test/fixtures/
 /webbench-1.5/webbench
 
 # CMake / Ninja / clangd 缓存
@@ -76,9 +94,11 @@ core
 core.[0-9]*
 *.stackdump
 
-# 编辑器临时文件（保留已有的 .vscode 共享配置）
+# 编辑器本地配置与临时文件；只共享 C++ 提示配置和文件类型关联。
 .idea/
-.vscode/ipch/
+/.vscode/*
+!/.vscode/c_cpp_properties.json
+!/.vscode/settings.json
 *.code-workspace
 *.swp
 *.swo

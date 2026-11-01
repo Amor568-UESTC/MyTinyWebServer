@@ -1,4 +1,16 @@
-### 将epoll封住为Epoller类
+# 服务器模块
+
+更新日期：2026-11-01。`main()` 通过 `LoadConfig()` 读取并校验 TOML，再把拥有字符串存储的 `ServerConfig` 移入 `WebServer`。具体字段、启动命令与测试入口见 [配置化指南](../../docs/config-and-hot-reload-guide.md)。
+
+端口、ET/LT 模式、超时、资源路径、线程数、数据库、TLS 和插件参数已接入.主线程先初始化 MySQL 库,再初始化日志、连接数据库、准备 TLS 和可选插件,然后创建监听,最后创建工作线程.启动失败通过 main 输出 stderr 并返回 1,构造失败时回收监听 fd、数据库连接和已加载的插件.日志阈值、队列容量和独立客户端证书开关已生效.连接与工作线程的关闭协调继续暂缓.
+
+启用插件时 WebServer 持有 shared_ptr<PluginManager>,AddClient_ 在投递任务前复制到 HttpConn.每次完整请求取得当前模块快照,GET /api/version 由 RequestHandler 调用该模块;其他页面和登录注册沿用原路径.已有 keep-alive 连接的后续请求也能使用新版.
+
+main 在任何线程创建之前屏蔽 SIGHUP.启用插件时创建 signalfd 并加入 epoll,Start 优先识别信号 fd,只向 PluginReloader 提交任务.独立重载线程重新读取启动时的配置文件,只应用 plugin.path.失败保留当前模块,成功发布新快照.析构先等待重载线程结束.具体使用方式见 [热更新指南](../../docs/plugin-hot-reload-guide.md).
+
+初始化失败回归位于 [test/](test/readme.md),本目录测试使用真实 main 和注入的 MySQL/网络失败,项目根目录执行 `make server-test`.
+
+### 将epoll封装为Epoller类
 
 ## 类内部私有成员和函数
 
@@ -12,8 +24,8 @@
 
     # Epoller(int maxEvent)
     explicit禁止隐式构造...
-    初始化events_数组，调用epoll_create()初始化
-    红黑树，消息队列资源等，返回给epollFd_描述符
+    校验容量并初始化events_数组,通过epoll_create1(EPOLL_CLOEXEC)
+    创建epoll描述符.创建失败时抛异常,由main统一输出原因
 
     # ~Epoller()
     调用close(epollFd_)，关闭并释放资源
@@ -50,16 +62,16 @@
 
     # initSocket_()
     套接字初始化函数。初始化Ip地址端口等，初始化optLinger，
-    若ipenLinger_为1,表示linger开启，控制socket关闭时间
+    若config_.server.linger为true,表示linger开启，控制socket关闭时间
     为1s，否则默认会直到缓存中数据发送完毕才关闭socket。
-    初始化listenFd_，设置listenFd_的LINGER，设置为多路复用
-    模式，绑定ListenFd_的地址。将listenFd_加入epoll红黑树
-    中，设置为非阻塞模式
+    初始化listenFd_,设置LINGER和地址复用,检查非阻塞设置,
+    绑定并监听地址,最后加入epoll.任一步失败均抛出保留errno的异常,
+    由构造函数回收listenFd_,避免重复关闭
 
-    # InitEventMode_(int trigMode)
-    根据函数参数触发模式，设置listenEvent_和connEvent_
+    # InitEventMode_(TriggerMode listenMode, TriggerMode connectionMode)
+    根据监听和连接各自的触发模式，设置listenEvent_和connEvent_
     是否为水平或者边缘触发。先将listenEvent_设置为
-    EPOLLRDHUB若对端关闭则会触发，connEvent_多设置一个
+    EPOLLRDHUP若对端关闭写方向则会触发，connEvent_多设置一个
     EPOLLONESHOT事件被处理后，epoll不会自动重新注册该事件。
     这意味着，当事件被触发并被处理后，如果需要再次监听该事件，
     必须手动重新注册。在多线程环境中，它可以确保一个事件只
@@ -67,7 +79,7 @@
     根据connEvent_为EPOLLET设置
 
     # AddClient_(int fd,sockaddr_in addr)
-    添加客户端。先使用函数参数初始化user_[fd]，如果timeoutMS_
+    添加客户端。先使用函数参数初始化user_[fd]，如果config_.server.idleTimeoutMs
     设置>0，则向timer_中添加绑定关闭客户端函数。设置fd非阻塞
 
     # DealListen_()
@@ -110,23 +122,15 @@
     # SetFdNonblock(int fd)
     设置fd为非阻塞
 
-    # port_             int
-    端口号
-
-    # openLinger_       bool
-    优雅关闭标志
-
-    # timeoutMS_        int 
-    超时时间
+    # config_           const ServerConfig
+    服务器持有的启动配置。端口、linger、空闲超时、HTTPS开关等
+    直接读取config_，不再重复保存成独立配置成员。
 
     # isClose_          bool
     是否关闭标志
 
     # listenFd_         int
     监听描述符
-
-    # srcDir            char*
-    源文件夹名字
 
     # listenEvent_      uint32_t
     描述listenFd_性质
@@ -148,19 +152,19 @@
 
 ## 类内部公有函数
 
-    # WebServer(int port, ... ,)
-    按照参数初始化port_,openLinger_,timeoutMS_,isClose_置0
-    timer_,threadpool_,epoller_构造。获取文件夹，并初始化
-    srcDir_为源文件夹引给HttpConn::srcDir,初始化连接池实例，
-    初始化事件模式，套接字等。若开启Log，初始化Log实例，向Log中
-    写入基本信息
+    # WebServer(ServerConfig config)
+    按值接收配置并移入config_,先初始化MySQL客户端库和日志,
+    再建立数据库连接、TLS上下文、epoll和监听,最后创建工作线程.
+    HttpConn::srcDir借用config_.server.documentRoot的字符串存储,
+    配置在服务器运行期间保持不变.构造失败时显式回收原始fd和空闲SQL连接,
+    异常传播到main,日志关闭时仍输出终端错误并返回非零退出码
 
     # ~WebServer()
-    关闭listenFd_,isClose_标志置1,释放srcDir_，关闭sql连接池
+    关闭listenFd_,isClose_标志置1，关闭sql连接池
     实例。
 
     # void Start()
-    开始服务器运行。见设置timeMS为-1，进入循环。判断是否有timeoutMS_
+    开始服务器运行。设置timeMS为-1，进入循环。若config_.server.idleTimeoutMs
     >0，设置timeMS为定时器下个事件过期时间，调用epoller检测IO。
     检测完成后根据就绪IO的事件类型进行操作：监听，读，或者写事件。
 

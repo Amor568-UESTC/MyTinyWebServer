@@ -1,25 +1,33 @@
 # HTTP / HTTPS 测试说明
 
-更新日期：2026-10-19。当前 `httpsconnTest.cpp` 是早期接口实验程序，尚不能作为 HTTPS 回归或合入验收入口。已知问题与验证结果见 [修复清单](../../../docs/https-known-issues.md)。
+更新日期：2026-11-01。测试源码和独立 Makefile 放在本目录,默认产物也生成在本目录.当前 `httpsconnTest.cpp` 是早期接口实验程序，尚不能作为 HTTPS 回归或合入验收入口。已知问题与验证结果见 [修复清单](../../../docs/https-known-issues.md)。
 
 ## 文件响应回归
 
-从项目根目录编译并运行：
+进入本目录编译并运行:
 
 ```bash
-g++ -std=c++23 -pthread -g -O0 -Wall \
-  code/http/test/httpresponseTest.cpp \
-  code/http/httpresponse.cpp \
-  code/buffer/buffer.cpp \
-  code/log/log.cpp \
-  -Wl,--wrap=mmap \
-  -o /tmp/tinyweb-httpresponse-test
-/tmp/tinyweb-httpresponse-test
+cd code/http/test
+make test
 ```
+
+如果已经位于本目录,直接执行 `make test`.单独 make 只编译,生成 httpresponseTest、httprequestTest、httpconnProcessTest 和 sslcontextTest;make clean 清理这四个程序.项目根目录的 `make http-test` 会转发到本目录,也可以用 BIN_DIR 指定其他输出目录.新测试产物已加入 .gitignore,原有 httpsconnTest 二进制不由此 Makefile 覆盖或删除.
 
 `httpresponseTest.cpp` 自动创建和清理临时站点，不依赖数据库、证书或运行中的服务器。通过链接器 `--wrap=mmap` 模拟 ENOMEM，仅影响测试二进制。任一检查失败返回非零退出码。
 
-当前 9 项回归覆盖普通文件、空文件、mmap 失败时的 500 与状态清理、图片请求失败后的 HTML 类型、失败后的下一次响应、映射的 404 页面、内联 404 回退、重复映射与最终释放；同时检查响应长度、正文和 fd 数量。
+当前 17 项回归覆盖普通文件、空文件、mmap 失败时的 500 与状态清理、图片请求失败后的 HTML 类型、失败后的下一次响应、映射与内联 404、映射释放、Connection 行为,以及文本正文的所有权、含 NUL 字节的长度、空正文、Content-Type 校验、文件与文本切换和错误页缺失时的状态保留.
+
+## 请求解析与连接处理链
+
+httprequestTest 包含 24 项检查,不链接 MySQL 库,证明解析器已独立于数据库业务.覆盖 GET/POST 每个分段位置、连续请求、消息长度、非法头、表单解码和原始正文保留.解析 POST /login 不会执行验证或选择欢迎页.
+
+httpconnProcessTest 包含 17 项检查,在内存中驱动真实 HttpConn::process(),没有创建网络连接.覆盖首页与版本接口、分段请求、文件和文本切换、读关闭、400 及资源目录约束,并真实加载插件验证正文、管理器持有、500 后的下一请求和二进制长度.新增同一 keep-alive 连接切换、分段请求完成时取快照、替换失败保持旧版,以及 HTTPS 复用版本切换.HTTPS 检查只驱动继承的请求处理链,不执行 TLS 握手或网络收发.测试使用临时站点和本目录 plugin-fixtures/,不连接数据库.
+
+## TLS 上下文与客户端证书验证
+
+`sslcontextTest.cpp` 包含 10 个场景,由同一 `make test` 入口逐个运行,失败或超时返回非零.程序使用 OpenSSL API 在临时目录签发测试证书,通过内存 BIO 建立真实 TLS 握手,不读取本机 ssl 目录,不创建网络连接.
+
+覆盖普通单向 TLS、配置 CA 但不开启双向验证、要求证书时拒绝无证书客户端、接受受信任证书、拒绝不受信任证书,以及缺少 CA、证书或私钥加载失败、私钥不匹配和失败后重试.测试依赖 OpenSSL 开发库,不代表完整 HttpsConn 事件循环或并发关闭已经验收.
 
 ## 编译旧测试程序
 
@@ -29,11 +37,13 @@ g++ -std=c++23 -pthread -g -O0 -Wall \
 g++ -std=c++23 -pthread -g -O0 -Wall -Wextra \
   code/http/test/httpsconnTest.cpp \
   code/http/*.cpp \
+  code/handler/*.cpp \
+  code/plugin/*.cpp \
   code/buffer/*.cpp \
   code/log/log.cpp \
   code/pool/sqlconnpool.cpp \
   -o /tmp/tinyweb-httpsconn-test \
-  -lmysqlclient -lssl -lcrypto
+  -lmysqlclient -lssl -lcrypto -ldl
 ```
 
 产物放在 `/tmp`，避免覆盖仓库中仍被跟踪的旧二进制。旧的 C++17 命令不适用于当前源码中的 `unordered_map::contains()` 等调用。

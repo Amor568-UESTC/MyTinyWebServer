@@ -13,7 +13,7 @@ class HttpResponse
 {
 private:
     void AddStateLine_(Buffer& buff);
-    void AddHeader_(Buffer& buff);
+    void AddHeader_(Buffer& buff, const std::string& contentType);
     int OpenFile_() const;
     bool MapFile_(int srcFd);
 
@@ -35,8 +35,10 @@ public:
     HttpResponse();
     ~HttpResponse();
 
-    void Init(const std::string& srcDir,std::string& path,bool isKeepAlive=0,int code=-1);
+    void Init(const std::string& srcDir, const std::string& path, bool isKeepAlive = false, int code = -1);
     void MakeResponse(Buffer& buff);
+    void MakeTextResponse(Buffer& buff, const std::string& body, const std::string& contentType,
+                          bool isKeepAlive, int code = 200);
     void UnmapFile();
     char* File();
     size_t FileLen() const;

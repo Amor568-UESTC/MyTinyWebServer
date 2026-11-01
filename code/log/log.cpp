@@ -1,116 +1,126 @@
-#include"log.h"
+#include "log.h"
+
+#include <cerrno>
+#include <filesystem>
+#include <stdexcept>
+#include <system_error>
+#include <utility>
 
 using namespace std;
 
 Log::Log()
+    : lineCnt_(0), toDay_(0), level_(1), isOpen_(false), isAsync_(false), fp_(nullptr)
 {
-    lineCnt_=0;
-    isAsync_=0;
-    writeThread_=nullptr;
-    deque_=nullptr;
-    toDay_=0;
-    fp_=nullptr;
 }
 
 Log::~Log()
 {
-    if(writeThread_&&writeThread_->joinable()) 
     {
-        while(!deque_->empty())
-            deque_->flush();
+        lock_guard<mutex> locker(mtx_);
+        isOpen_ = false;
+    }
+    if (writeThread_ && writeThread_->joinable()) {
+        //关闭后继续消费已有日志,不再通过忙等判断队列是否排空
         deque_->Close();
         writeThread_->join();
     }
-    if(fp_)
-    {
-        lock_guard<mutex> locker(mtx_);
-        flush();
+    if (fp_) {
+        fflush(fp_);
         fclose(fp_);
     }
 }
 
 void Log::AppendLogLevelTitle_(int level)
 {
-    switch(level)
-    {
+    switch (level) {
         case 0:
-            buff_.Append("[debug]: ",9);
+            buff_.Append("[debug]: ");
             break;
         case 1:
-            buff_.Append("[info] : ",9);
+            buff_.Append("[info] : ");
             break;
         case 2:
-            buff_.Append("[warn] : ",9);
+            buff_.Append("[warn] : ");
             break;
         case 3:
-            buff_.Append("[error]: ",9);
+            buff_.Append("[error]: ");
             break;
         default:
-            buff_.Append("[info] : ",9);
+            buff_.Append("[info] : ");
             break;
     }
 }
 
 void Log::AsyncWrite_()
 {
-    string str="";
-    while(deque_->pop(str))
-    {
+    string text;
+    while (deque_->pop(text)) {
         lock_guard<mutex> locker(mtx_);
-        fputs(str.c_str(),fp_);
+        fwrite(text.data(), 1, text.size(), fp_);
     }
 }
 
-void Log::init(int level,const char* path,const char* suffix,int maxQueueCapacity)
+void Log::init(int level, const char* path, const char* suffix, int maxQueueCapacity)
 {
-    isOpen_=1;
-    level_=level;
-    if(maxQueueCapacity>0)
-    {
-        isAsync_=1;
-        if(!deque_)
-        {
-            unique_ptr<BlockDeque<string>> newDeque(new BlockDeque<string>);
-            deque_=move(newDeque); 
-            unique_ptr<thread> newThread(new thread(FlushLogThread));
-            writeThread_=move(newThread);
-        }
+    lock_guard<mutex> locker(mtx_);
+    if (isOpen_) {
+        throw logic_error("Logger is already initialized");
     }
-    else isAsync_=0;
-
-    lineCnt_=0;
-    time_t timer=time(nullptr);
-    tm *sysTime=localtime(&timer);
-    tm t=*sysTime;
-    path_=path;
-    suffix_=suffix;
-    char fileName[LOG_NAME_LEN]={0};
-    snprintf(fileName,LOG_NAME_LEN-1,"%s/%04d_%02d_%02d%s", 
-        path_,t.tm_year+1900,t.tm_mon+1,t.tm_mday,suffix_);
-    toDay_ = t.tm_mday;
-
-    {
-        lock_guard<mutex> locker(mtx_);
-        buff_.RetrieveAll();
-        if(fp_)
-        { 
-            flush();
-            fclose(fp_); 
-        }
-        fp_=fopen(fileName,"a");
-        if(fp_==nullptr)
-        {
-            mkdir(path_,0777);
-            fp_=fopen(fileName,"a");
-        } 
-        assert(fp_!=nullptr);
+    if (level < 0 || level > 3 || maxQueueCapacity < 0 ||
+        path == nullptr || path[0] == '\0' || suffix == nullptr) {
+        throw invalid_argument("Invalid logging configuration");
     }
+
+    string newPath(path);
+    string newSuffix(suffix);
+    filesystem::create_directories(newPath);
+    const time_t timer = time(nullptr);
+    tm calendar{};
+    if (localtime_r(&timer, &calendar) == nullptr) {
+        throw runtime_error("Cannot obtain the log date");
+    }
+    char date[32]{};
+    strftime(date, sizeof(date), "%Y_%m_%d", &calendar);
+    const auto fileName = filesystem::path(newPath) / (string(date) + newSuffix);
+
+    //文件和队列均准备成功后,再创建日志线程并发布可用状态
+    const auto closeFile = [](FILE* file) { fclose(file); };
+    unique_ptr<FILE, decltype(closeFile)> file(fopen(fileName.c_str(), "a"), closeFile);
+    if (!file) {
+        throw system_error(errno, generic_category(), "Cannot open log file " + fileName.string());
+    }
+    unique_ptr<BlockDeque<string>> queue;
+    if (maxQueueCapacity > 0) {
+        queue = make_unique<BlockDeque<string>>(static_cast<size_t>(maxQueueCapacity));
+    }
+
+    path_ = move(newPath);
+    suffix_ = move(newSuffix);
+    level_ = level;
+    lineCnt_ = 0;
+    toDay_ = calendar.tm_yday + calendar.tm_year * 366;
+    buff_.RetrieveAll();
+    deque_ = move(queue);
+    fp_ = file.release();
+    isAsync_ = maxQueueCapacity > 0;
+    try {
+        if (isAsync_) {
+            writeThread_ = make_unique<thread>(FlushLogThread);
+        }
+    } catch (...) {
+        fclose(fp_);
+        fp_ = nullptr;
+        deque_.reset();
+        isAsync_ = false;
+        throw;
+    }
+    isOpen_ = true;
 }
 
 Log* Log::Instance()
 {
-    static Log inst;
-    return &inst;
+    static Log instance;
+    return &instance;
 }
 
 void Log::FlushLogThread()
@@ -118,70 +128,91 @@ void Log::FlushLogThread()
     Log::Instance()->AsyncWrite_();
 }
 
-void Log::write(int level,const char* format,...)
+void Log::write(int level, const char* format, ...)
 {
-    timeval now={0,0};
-    gettimeofday(&now,nullptr);
-    time_t tSec=now.tv_sec;
-    tm* sysTime=localtime(&tSec);
-    tm t=*sysTime;
-    va_list vaList;
-
-    if (toDay_!= t.tm_mday||(lineCnt_&&(lineCnt_%MAX_LINES==0)))
-    {
-        unique_lock<mutex> locker(mtx_);
-        locker.unlock();
-        
-        char newFile[LOG_NAME_LEN];
-        char tail[36]={0};
-        snprintf(tail,36,"%04d_%02d_%02d",t.tm_year+1900,t.tm_mon+1,t.tm_mday);
-
-        if (toDay_!=t.tm_mday)
-        {
-            snprintf(newFile,LOG_NAME_LEN-72,"%s/%s%s",path_,tail,suffix_);
-            toDay_=t.tm_mday;
-            lineCnt_=0;
-        }
-        else
-            snprintf(newFile,LOG_NAME_LEN-72,"%s/%s-%d%s",path_,tail,(lineCnt_/MAX_LINES),suffix_);
-        
-        locker.lock();
-        flush();
-        fclose(fp_);
-        fp_ = fopen(newFile,"a");
-        assert(fp_!=nullptr);
+    timeval now{};
+    gettimeofday(&now, nullptr);
+    const time_t seconds = now.tv_sec;
+    tm calendar{};
+    if (localtime_r(&seconds, &calendar) == nullptr) {
+        return;
     }
 
-    {
-        unique_lock<mutex> locker(mtx_);
-        lineCnt_++;
-        int n=snprintf(buff_.BeginWrite(),128,"%d-%02d-%02d %02d:%02d:%02d.%06ld ",
-                    t.tm_year+1900,t.tm_mon+1,t.tm_mday,
-                    t.tm_hour,t.tm_min,t.tm_sec,now.tv_usec);
-                    
-        buff_.HasWritten(n);
-        AppendLogLevelTitle_(level);
+    lock_guard<mutex> locker(mtx_);
+    if (!isOpen_) {
+        return;
+    }
+    const int day = calendar.tm_yday + calendar.tm_year * 366;
+    if (toDay_ != day || (lineCnt_ > 0 && lineCnt_ % MAX_LINES == 0)) {
+        char date[32]{};
+        strftime(date, sizeof(date), "%Y_%m_%d", &calendar);
+        const string tail = toDay_ != day ? "" : "-" + to_string(lineCnt_ / MAX_LINES);
+        const auto fileName = filesystem::path(path_) / (string(date) + tail + suffix_);
+        FILE* file = fopen(fileName.c_str(), "a");
+        if (file) {
+            fflush(fp_);
+            fclose(fp_);
+            fp_ = file;
+            if (toDay_ != day) {
+                toDay_ = day;
+                lineCnt_ = 0;
+            }
+        } else {
+            //轮转失败时保留原文件,不让写日志导致服务线程退出
+            fprintf(stderr, "Cannot rotate log file: %s\n", strerror(errno));
+        }
+    }
 
-        va_start(vaList,format);
-        int m=vsnprintf(buff_.BeginWrite(),buff_.WritableBytes(),format,vaList);
-        va_end(vaList);
+    buff_.RetrieveAll();
+    char timestamp[128]{};
+    const int prefixLength = snprintf(timestamp, sizeof(timestamp),
+        "%04d-%02d-%02d %02d:%02d:%02d.%06ld ",
+        calendar.tm_year + 1900, calendar.tm_mon + 1, calendar.tm_mday,
+        calendar.tm_hour, calendar.tm_min, calendar.tm_sec, now.tv_usec);
+    buff_.Append(timestamp, static_cast<size_t>(prefixLength));
+    AppendLogLevelTitle_(level);
 
-        buff_.HasWritten(m);
-        buff_.Append("\n\0",2);
-
-        if(isAsync_&&deque_&&!deque_->full()) 
-            deque_->push_back(buff_.RetrieveAllToString());
-        else
-            fputs(buff_.Peek(), fp_);
-
+    va_list arguments;
+    va_start(arguments, format);
+    va_list countArguments;
+    va_copy(countArguments, arguments);
+    const int length = vsnprintf(nullptr, 0, format, countArguments);
+    va_end(countArguments);
+    if (length < 0) {
+        va_end(arguments);
         buff_.RetrieveAll();
+        return;
+    }
+    try {
+        //vsnprintf返回所需长度,必须先扩容再写入,不能把截断长度当作已写长度
+        buff_.EnsureWritable(static_cast<size_t>(length) + 1);
+    } catch (...) {
+        va_end(arguments);
+        throw;
+    }
+    vsnprintf(buff_.BeginWrite(), buff_.WritableBytes(), format, arguments);
+    va_end(arguments);
+    buff_.HasWritten(static_cast<size_t>(length));
+    buff_.Append("\n", 1);
+    ++lineCnt_;
+
+    const string text = buff_.RetrieveAllToString();
+    if (isAsync_ && !deque_->full()) {
+        deque_->push_back(text);
+    } else {
+        fwrite(text.data(), 1, text.size(), fp_);
     }
 }
 
 void Log::flush()
 {
-    if(isAsync_) deque_->flush();
-    fflush(fp_);
+    lock_guard<mutex> locker(mtx_);
+    if (isAsync_) {
+        deque_->flush();
+    }
+    if (fp_) {
+        fflush(fp_);
+    }
 }
 
 int Log::GetLevel()
@@ -193,5 +224,17 @@ int Log::GetLevel()
 void Log::SetLevel(int level)
 {
     lock_guard<mutex> locker(mtx_);
-    level_=level;
+    level_ = level;
+}
+
+bool Log::IsOpen()
+{
+    lock_guard<mutex> locker(mtx_);
+    return isOpen_;
+}
+
+size_t Log::GetQueueCapacity()
+{
+    lock_guard<mutex> locker(mtx_);
+    return deque_ ? deque_->capacity() : 0;
 }

@@ -1,0 +1,39 @@
+# 复制为同目录的 server.toml 后填写本机参数。
+# 文件内的相对路径以本配置文件所在目录为基准。
+[server]
+port = 8888
+listenMode = "et"
+connectionMode = "et"
+idleTimeoutMs = 60000
+linger = false
+workerThreads = 6
+documentRoot = "../rss"
+
+[database]
+host = "localhost"
+port = 3306
+user = "your_user"
+# 启动前设置对应的环境变量；也可改用 password，但两项不能同时填写。
+passwordEnv = "TINYWEB_DB_PASSWORD"
+name = "yourdb"
+poolSize = 12
+
+[tls]
+enabled = false
+certificate = "../ssl/lan-server.crt"
+privateKey = "../ssl/lan-server.key"
+#客户端证书的信任源,填写此路径不会自动开启双向TLS
+clientCaFile = ""
+#开启后必须配置clientCaFile,客户端也必须提供有效证书
+requireClientCertificate = false
+
+[logging]
+enabled = true
+level = 1
+asyncQueueSize = 1024
+
+#相对路径以本配置文件所在目录为基准,启用前先独立编译插件
+#启用后可修改path并发送SIGHUP重载,其他配置变更仍需重启
+[plugin]
+enabled = false
+path = "../plugins/business.v1.so"

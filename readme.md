@@ -3,123 +3,146 @@
 使用C++实现的轻量级服务器，可以实现成千上万的连接数目
 
 ## 环境
-* Linux
-* C++14
-* MySql
 
-## 全文件的目录树如下
-.
-└── MyTinyWebServer
-    ├── build
-    │   └── Makefile
-    ├── code        源代码
-    │   ├── buffer
-    │   │   ├── buffer.cpp
-    │   │   ├── buffer.h
-    │   │   └── readme.md
-    │   ├── http
-    │   │   ├── httpconn.cpp
-    │   │   ├── httpconn.h
-    │   │   ├── httprequest.cpp
-    │   │   ├── httprequest.h
-    │   │   ├── httpresponse.cpp
-    │   │   ├── httpresponse.h
-    │   │   └── readme.md
-    │   ├── log
-    │   │   ├── blockqueue.hpp
-    │   │   ├── log.cpp
-    │   │   ├── log.h
-    │   │   └── readme.md
-    │   ├── main.cpp
-    │   ├── pool
-    │   │   ├── readme.md
-    │   │   ├── sqlconnpool.cpp
-    │   │   ├── sqlconnpool.h
-    │   │   ├── sqlconnRAII.h
-    │   │   └── threadpool.h
-    │   ├── server
-    │   │   ├── epoller.cpp
-    │   │   ├── epoller.h
-    │   │   ├── readme.md
-    │   │   ├── webserver.cpp
-    │   │   └── webserver.h
-    │   └── timer
-    │       ├── heaptimer.cpp
-    │       ├── heaptimer.h
-    │       └── readme.md
-    ├── Makefile
-    ├── rss     源文件夹
-    │   ├── 400.html
-    │   ├── 403.html
-    │   ├── 404.html
-    │   ├── 405.html
-    │   ├── css
-    │   │   ├── animate.css
-    │   │   ├── bootstrap.min.css
-    │   │   ├── font-awesome.min.css
-    │   │   ├── magnific-popup.css
-    │   │   └── style.css
-    │   ├── error.html
-    │   ├── fonts
-    │   │   ├── FontAwesome.otf
-    │   │   ├── fontawesome-webfont.eot
-    │   │   ├── fontawesome-webfont.svg
-    │   │   ├── fontawesome-webfont.ttf
-    │   │   ├── fontawesome-webfont.woff
-    │   │   └── fontawesome-webfont.woff2
-    │   ├── images
-    │   │   ├── favicon.ico
-    │   │   ├── instagram-image1.jpg
-    │   │   ├── instagram-image2.jpg
-    │   │   ├── instagram-image3.jpg
-    │   │   ├── instagram-image4.jpg
-    │   │   ├── instagram-image5.jpg
-    │   │   └── profile-image.jpg
-    │   ├── index.html
-    │   ├── js
-    │   │   ├── bootstrap.min.js
-    │   │   ├── custom.js
-    │   │   ├── jquery.js
-    │   │   ├── jquery.magnific-popup.min.js
-    │   │   ├── magnific-popup-options.js
-    │   │   ├── smoothscroll.js
-    │   │   └── wow.min.js
-    │   ├── login.html
-    │   ├── picture.html
-    │   ├── register.html
-    │   ├── video
-    │   │   ├── del.mp4
-    │   │   └── xxx.mp4
-    │   ├── video.html
-    │   └── welcome.html
-    └── webbench-1.5        压力测试
-        ├── Makefile
-        ├── socket.c
-        ├── webbench
-        ├── webbench.c
-        └── webbench.o
+* Linux
+* 支持 C++23 的 g++，以及 make、pkg-config
+* MySQL 客户端开发库，以及可连接的 MySQL 服务
+* OpenSSL 开发库
+* 系统安装的 toml++，当前使用 v3.4.0，提供 `<toml++/toml.hpp>` 和 `tomlplusplus.pc`
+
+构建使用 `pkg-config` 获取 toml++ 的编译、链接参数。可以先检查：
+
+```bash
+pkg-config --modversion tomlplusplus
+pkg-config --cflags --libs tomlplusplus
+```
+
+## 主要目录
+
+```text
+MyTinyWebServer/
+├── Makefile
+├── build/Makefile
+├── code/
+│   ├── main.cpp
+│   ├── config/       配置结构、TOML Loader 与配置测试
+│   ├── buffer/       普通与 TLS I/O 缓冲
+│   ├── http/         HTTP 解析、响应和 HTTP/HTTPS 连接
+│   ├── handler/      路由、业务结果与登录注册服务
+│   ├── log/          日志与异步队列
+│   ├── pool/         线程池与数据库连接池
+│   ├── server/       epoll 与服务器事件分派
+│   └── timer/        连接定时器
+├── config/
+│   └── server.example.toml
+├── docs/             配置化路线与 HTTPS 已知问题
+├── rss/              静态网页、样式、图片与视频
+└── webbench-1.5/      压力测试工具
+```
+
+本机另行准备 `config/server.toml`、HTTPS 所需的 `ssl/` 证书目录，以及运行时生成的 `bin/`、`log/`。
 
 ## 项目启动
-先要配置好数据库
-```bash
-create database yourdb;
 
-use yourdb
-create table user(
+先连接到本机 MySQL，创建数据库和业务表：
+
+```sql
+CREATE DATABASE IF NOT EXISTS yourdb;
+USE yourdb;
+
+CREATE TABLE IF NOT EXISTS user (
     username char(50) null,
     password char(50) null
-)
-
-insert into user(username,password) values ('name','password');
+);
 ```
 
-在文件目录下进行编译
+首次使用时，在项目根目录复制配置模板；已有 `config/server.toml` 时直接编辑原文件：
+
 ```bash
-make 
-./bin/server
+cp config/server.example.toml config/server.toml
 ```
 
-删除bin文件夹和log文件夹
+在本机配置中填写 `[database]` 的主机、端口、用户、数据库名和连接池大小。模板使用 `passwordEnv = "TINYWEB_DB_PASSWORD"` 指定密码的环境变量名称，真实密码由启动环境提供。默认启用数据库连接池，普通静态页面访问也会先初始化连接池。
+
+原有 `password = "..."` 写法仍兼容；迁移时删除该字段，改为 `passwordEnv`，两项不能同时存在。指定的环境变量未设置或为空时，Loader 会明确报错。原有空密码配置继续允许使用 `password = ""`。
+
+配置字段使用驼峰命名并区分大小写，未知字段和类型错误会阻止启动。`documentRoot`、证书和私钥等配置内的相对路径，以配置文件所在目录为基准；模板中的 `../rss` 指向项目资源目录。
+
+在 Bash 终端逐条执行以下命令；`read` 会等待输入密码，输入内容不回显。`export` 使启动的服务器进程能够读取该变量：
+
+```bash
+make
+read -r -s -p 'MySQL password: ' TINYWEB_DB_PASSWORD
+printf '\n'
+export TINYWEB_DB_PASSWORD
+bin/server --config config/server.toml
+```
+
+不带参数时同样读取 `config/server.toml`；`bin/server --help` 查看启动格式。跨目录启动时，使用可执行文件和配置文件的绝对路径。日志当前仍写入启动工作目录下的 `./log`。
+
+开启 HTTPS 时，在本机准备证书和私钥，将 `[tls]` 的 `enabled` 设为 `true`，并填写 `certificate` 和 `privateKey`。普通单向 HTTPS 使用 `requireClientCertificate = false`,默认 `clientCaFile` 留空.需要双向 TLS 时设为 true,并填写用于验证客户端的 CA;原先依赖非空 CA 路径开启验证的配置需要显式增加此开关.证书与私钥不随仓库分发。
+
+日志级别 0/1/2/3 分别为 DEBUG/INFO/WARN/ERROR,按最低输出级别过滤.`asyncQueueSize = 0` 使用同步写入,正数指定异步队列容量.日志在数据库实际连接之前初始化;日志、数据库、TLS、epoll 或监听初始化失败时,终端会输出原因,进程返回 1.
+
+当前支持启动时 TOML 配置和进程环境变量密码,插件路径可通过 SIGHUP 运行时重载,其他参数变更仍需重启.环境变量值会复制到 ServerConfig,改变密码来源并不等于加密,也不会改变 MySQL 的账号认证方式.`.env` 文件读取尚未实现.实施进度见 [配置化与热更新指南](docs/config-and-hot-reload-guide.md),已知限制见 [HTTPS 问题清单](docs/https-known-issues.md).
+
+仓库的命名、注释、排版及测试目录约定见 [风格Skill参考](docs/skills/tinyweb-style/SKILL.md).
+
+业务层已与解析器分离:HttpRequest 只解析请求,RequestHandler 处理页面别名与业务分派,UserService 执行参数化 SQL,HandlerResult 交给 HttpResponse 生成文件或文本响应.GET `/api/version` 默认返回内置 `TinyWebServer v1\n`,启用插件后调用启动时加载的 .so.端点自身不访问数据库,但启动流程仍要求数据库连接池初始化成功.说明见 [handler 模块](code/handler/readme.md) 和 [plugin 模块](code/plugin/readme.md).
+
+插件单独编译后,在本机 config/server.toml 中启用:
+
+```toml
+[plugin]
+enabled = true
+path = "../plugins/business.v1.so"
+```
+
+相对路径以 TOML 文件所在目录为基准.首次部署新版主程序需编译并重启一次,之后可用 `make -C plugins VERSION=v2` 发布新版本,修改 plugin.path 并向该进程发送 SIGHUP.每次请求取得模块快照,旧请求继续使用原版本,已有 keep-alive 连接的下一请求也会取得新版.插件加载失败保留当前版本,单次业务失败返回 HTTP 500.静态资源与登录注册沿用原业务层.操作步骤见 [热更新指南](docs/plugin-hot-reload-guide.md).
+
+配置读取回归不依赖数据库服务和真实证书：
+
+```bash
+make config-test
+```
+
+该目标运行 71 项配置检查。HTTP/HTTPS 的其他验证方式见 [测试说明](code/http/test/readme.md)。
+
+数据库连接池和无连接登录失败路径的回归：
+
+```bash
+make sql-test
+```
+
+该目标运行 15 个模拟 MySQL API 的场景，不连接真实数据库。连接池采用池空时返回失败的策略，互斥锁只保护空闲连接队列，执行 SQL 时不持有锁。测试范围和关闭时的生命周期限制见 [连接池说明](code/pool/readme.md)。
+
+测试统一放在对应模块的 `test/` 小目录中,各目录自带 Makefile 和说明,默认测试程序也在本目录生成:
+
+| 测试目录 | 默认程序 | 根目录转发命令 |
+| --- | --- | --- |
+| `code/config/test/` | `configloaderTest` | `make config-test` |
+| `code/pool/test/` | `sqlconnpoolTest` | `make sql-test` |
+| `code/http/test/` | `httpresponseTest` | `make http-test` |
+| `code/http/test/` | `httprequestTest` | `make http-test` |
+| `code/http/test/` | `httpconnProcessTest` | `make http-test` |
+| `code/http/test/` | `sslcontextTest` | `make http-test` |
+| `code/handler/test/` | `requesthandlerTest` / `userserviceTest` | `make handler-test` |
+| `code/plugin/test/` | `moduleTest` / `pluginmanagerTest` / `pluginSmoke` | `make plugin-test` |
+| `code/log/test/` | `logTest` | `make log-test` |
+| `code/server/test/` | `serverStartupTest` / `reloadsignalTest` | `make server-test` |
+
+可以进入任意上述目录,用 `make` 编译、`make test` 编译并运行、`make clean` 清理该 Makefile 生成的程序.原有 ThreadPoolV2 和 HTTPS 实验测试继续保留原来的单独编译方式,具体见各 test 目录的说明.
+
+七个根目录入口共 271 项检查:配置 71、连接池 15、文件与文本响应 17、请求解析 24、连接处理链 17、业务路由 27、用户服务 14、TLS 上下文及握手 10、日志 8、启动及运行场景 23、信号 5、插件模块 26、管理器与重载线程 14.插件入口还运行独立加载示例.TLS 测试通过内存 BIO 握手,信号测试使用真实 SIGHUP/signalfd/epoll,数据库和监听使用模拟依赖,均不需要本机数据库密码或占用服务端口.真实数据库业务、完整网络服务与并发关闭问题仍需独立验收.
+
+本机 `config/server.toml`、`.env`、证书、私钥和构建产物已由 `.gitignore` 忽略。`.vscode` 只共享 C++ 提示配置和文件类型关联，其他本地配置忽略。
+
+可以在旧服务器运行时执行 `make`。构建只将 `.cpp` 作为编译输入，先在输出目录中的独立临时目录生成可执行文件，成功后通过重命名替换 `bin/server`；编译或链接失败时保留原文件。
+
+旧进程继续运行原来的代码，新版本需要停止旧进程并重新启动后才会生效。重编译不会自动更新正在运行的进程。
+
+建议停止服务器后再清理。以下命令会删除 bin 和 log 目录,并清理上述各 test 目录的 Makefile 生成的测试程序:
+
 ```bash
 make clean
 ```
